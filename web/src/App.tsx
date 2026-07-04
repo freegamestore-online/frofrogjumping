@@ -5,7 +5,7 @@ import { useHighScore } from "./hooks/useHighScore";
 import { drawGlow, lerp, clamp } from "./lib/canvas";
 import {
   generateIslands, makePlayerFrog, makeRivalFrog, makeBird, makeFish,
-  dist, randBetween, arcY, SINK_TIME,
+  dist, randBetween, arcY, SINK_TIME, RIVAL_HOP_RANGE,
 } from "./lib/marshGame";
 import type { Island, Frog, Bird, Fish, Ripple, Particle, FloatText, DeathCause } from "./types";
 
@@ -163,13 +163,13 @@ function drawFrog(
   ctx.rotate(frog.angle);
   ctx.scale(frog.squishX, frog.squishY);
 
-  const r = 15;
+  const r = frog.isPlayer ? 15 : 12;
   const bodyColor = frog.color;
   const darkColor = frog.isPlayer ? C.frogDk : darken(bodyColor);
   const bellyColor = frog.isPlayer ? C.frogBly : lighten(bodyColor);
 
   // Shadow when sitting
-  if (frog.jumpT >= 1) {
+  if (frog.jumpT >= 1 && !frog.jumping) {
     ctx.beginPath();
     ctx.ellipse(2, r * 0.85, r * 0.65, r * 0.22, 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,0.22)";
@@ -177,13 +177,13 @@ function drawFrog(
   }
 
   // Hind legs
-  const legBob = frog.jumpT < 1 ? Math.sin(t * 14) * 2 : 0;
+  const legBob = frog.jumping ? Math.sin(t * 14) * 2 : 0;
   ctx.fillStyle = darkColor;
   ctx.beginPath();
-  ctx.ellipse(-r * 0.88, r * 0.52 + legBob, 7, 4.5, Math.PI * 0.35, 0, Math.PI * 2);
+  ctx.ellipse(-r * 0.88, r * 0.52 + legBob, 7 * r / 15, 4.5 * r / 15, Math.PI * 0.35, 0, Math.PI * 2);
   ctx.fill();
   ctx.beginPath();
-  ctx.ellipse(r * 0.88, r * 0.52 + legBob, 7, 4.5, -Math.PI * 0.35, 0, Math.PI * 2);
+  ctx.ellipse(r * 0.88, r * 0.52 + legBob, 7 * r / 15, 4.5 * r / 15, -Math.PI * 0.35, 0, Math.PI * 2);
   ctx.fill();
 
   // Body
@@ -201,29 +201,30 @@ function drawFrog(
   // Front legs
   ctx.fillStyle = darkColor;
   ctx.beginPath();
-  ctx.ellipse(-r * 0.72, r * 0.08, 4.5, 3.5, Math.PI * 0.2, 0, Math.PI * 2);
+  ctx.ellipse(-r * 0.72, r * 0.08, 4.5 * r / 15, 3.5 * r / 15, Math.PI * 0.2, 0, Math.PI * 2);
   ctx.fill();
   ctx.beginPath();
-  ctx.ellipse(r * 0.72, r * 0.08, 4.5, 3.5, -Math.PI * 0.2, 0, Math.PI * 2);
+  ctx.ellipse(r * 0.72, r * 0.08, 4.5 * r / 15, 3.5 * r / 15, -Math.PI * 0.2, 0, Math.PI * 2);
   ctx.fill();
 
   // Eyes
   for (const ex of [-r * 0.43, r * 0.43]) {
     const ey = -r * 0.44;
+    const er = r * 0.4;
     ctx.beginPath();
-    ctx.arc(ex, ey, 6, 0, Math.PI * 2);
+    ctx.arc(ex, ey, er, 0, Math.PI * 2);
     ctx.fillStyle = bodyColor;
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(ex, ey, 4.5, 0, Math.PI * 2);
+    ctx.arc(ex, ey, er * 0.75, 0, Math.PI * 2);
     ctx.fillStyle = frog.eyeColor;
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(ex + 1, ey + 1, 2.4, 0, Math.PI * 2);
+    ctx.arc(ex + er * 0.22, ey + er * 0.22, er * 0.5, 0, Math.PI * 2);
     ctx.fillStyle = C.frogPup;
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(ex + 0.4, ey - 0.5, 0.9, 0, Math.PI * 2);
+    ctx.arc(ex + er * 0.1, ey - er * 0.1, er * 0.18, 0, Math.PI * 2);
     ctx.fillStyle = "#fff";
     ctx.fill();
   }
@@ -231,7 +232,6 @@ function drawFrog(
   ctx.restore();
 }
 
-// simple color helpers (no external deps)
 function darken(hex: string): string {
   const n = parseInt(hex.replace("#", ""), 16);
   const r = Math.max(0, ((n >> 16) & 0xff) - 50);
@@ -250,7 +250,6 @@ function lighten(hex: string): string {
 function drawBird(ctx: CanvasRenderingContext2D, bird: Bird) {
   ctx.save();
   ctx.translate(bird.x, bird.y);
-  // face direction of travel
   if (bird.vx < 0) ctx.scale(-1, 1);
 
   const wingFlap = bird.phase === "soaring"
@@ -259,13 +258,11 @@ function drawBird(ctx: CanvasRenderingContext2D, bird: Bird) {
       ? 0.2
       : Math.sin(bird.wingT * 9) * 0.7;
 
-  // Body
   ctx.beginPath();
   ctx.ellipse(0, 0, 18, 8, 0, 0, Math.PI * 2);
   ctx.fillStyle = C.birdBody;
   ctx.fill();
 
-  // Upper wing
   ctx.save();
   ctx.rotate(-wingFlap);
   ctx.beginPath();
@@ -274,7 +271,6 @@ function drawBird(ctx: CanvasRenderingContext2D, bird: Bird) {
   ctx.fill();
   ctx.restore();
 
-  // Lower wing
   ctx.save();
   ctx.rotate(wingFlap * 0.4);
   ctx.beginPath();
@@ -283,13 +279,11 @@ function drawBird(ctx: CanvasRenderingContext2D, bird: Bird) {
   ctx.fill();
   ctx.restore();
 
-  // Head
   ctx.beginPath();
   ctx.arc(16, -3, 7, 0, Math.PI * 2);
   ctx.fillStyle = C.birdBody;
   ctx.fill();
 
-  // Beak
   ctx.beginPath();
   ctx.moveTo(22, -3);
   ctx.lineTo(34, -1);
@@ -298,23 +292,14 @@ function drawBird(ctx: CanvasRenderingContext2D, bird: Bird) {
   ctx.fillStyle = C.birdBeak;
   ctx.fill();
 
-  // Eye
   ctx.beginPath();
   ctx.arc(18, -5, 2.5, 0, Math.PI * 2);
   ctx.fillStyle = "#fff";
   ctx.fill();
   ctx.beginPath();
   ctx.arc(18.5, -5, 1.3, 0, Math.PI * 2);
-  ctx.fillStyle = "#111";
+  ctx.fillStyle = bird.phase === "diving" ? "#ff1744" : "#111";
   ctx.fill();
-
-  // Dive indicator — red glint eyes when diving
-  if (bird.phase === "diving") {
-    ctx.beginPath();
-    ctx.arc(18.5, -5, 1.3, 0, Math.PI * 2);
-    ctx.fillStyle = "#ff1744";
-    ctx.fill();
-  }
 
   ctx.restore();
 }
@@ -327,7 +312,6 @@ function drawFish(ctx: CanvasRenderingContext2D, fish: Fish) {
   const scaleY = fish.phase === "rising" || fish.phase === "snapping" ? 1 : 0.6;
   ctx.scale(1, scaleY);
 
-  // Tail
   ctx.beginPath();
   ctx.moveTo(-28, 0);
   ctx.lineTo(-44, -14);
@@ -336,19 +320,16 @@ function drawFish(ctx: CanvasRenderingContext2D, fish: Fish) {
   ctx.fillStyle = C.fishBody;
   ctx.fill();
 
-  // Body
   ctx.beginPath();
   ctx.ellipse(0, 0, 30, 14, 0, 0, Math.PI * 2);
   ctx.fillStyle = C.fishBody;
   ctx.fill();
 
-  // Belly
   ctx.beginPath();
   ctx.ellipse(4, 4, 20, 8, 0, 0, Math.PI * 2);
   ctx.fillStyle = C.fishBelly;
   ctx.fill();
 
-  // Mouth (opens on snap)
   const mouthGape = fish.mouthOpen * 22;
   ctx.beginPath();
   ctx.moveTo(28, 0);
@@ -358,7 +339,6 @@ function drawFish(ctx: CanvasRenderingContext2D, fish: Fish) {
   ctx.fillStyle = "#e53935";
   ctx.fill();
 
-  // Eye
   ctx.beginPath();
   ctx.arc(14, -5, 5, 0, Math.PI * 2);
   ctx.fillStyle = C.fishEye;
@@ -419,9 +399,8 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // ── game state (all in refs to avoid re-renders in the loop) ────────────
   const islandsRef = useRef<Island[]>([]);
-  const frogsRef = useRef<Frog[]>([]);          // [0] = player, rest = rivals
+  const frogsRef = useRef<Frog[]>([]);
   const birdsRef = useRef<Bird[]>([]);
   const fishRef = useRef<Fish[]>([]);
   const ripplesRef = useRef<Ripple[]>([]);
@@ -434,7 +413,6 @@ export default function App() {
   const deathCauseRef = useRef<DeathCause>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // ── react state (UI only) ────────────────────────────────────────────────
   const [score, setScore] = useState(0);
   const [phase, setPhase] = useState<"idle" | "jumping" | "dead" | "won">("idle");
   const [deathCause, setDeathCause] = useState<DeathCause>(null);
@@ -500,12 +478,11 @@ export default function App() {
     const islands = generateIslands(W, H, count, startX, startY);
     islandsRef.current = islands;
 
-    // Player frog on start island
     const start = islands[0]!;
     const player = makePlayerFrog(start.x, start.y, 0);
     const frogs: Frog[] = [player];
 
-    // Rival frogs — one per random mid island (not first, not last)
+    // Rival frogs on random mid islands (not first, not last)
     for (let i = 1; i < islands.length - 1; i++) {
       if (Math.random() < 0.55) {
         const isl = islands[i]!;
@@ -560,24 +537,20 @@ export default function App() {
 
     const islands = islandsRef.current;
 
-    // Find tapped island
     let tappedIdx = -1;
     let bestD = 9999;
     for (let i = 0; i < islands.length; i++) {
       if (i === player.islandIdx) continue;
       const isl = islands[i]!;
       const d = dist(tapX, tapY, isl.x, isl.y + isl.wobble);
-      // generous tap radius
       if (d < isl.r + 28 && d < bestD) { bestD = d; tappedIdx = i; }
     }
     if (tappedIdx === -1) return;
 
     const targetIsl = islands[tappedIdx]!;
-    // Too far?
     const jumpDist = dist(player.x, player.y, targetIsl.x, targetIsl.y);
     if (jumpDist > 340) return;
 
-    // Launch player
     player.fromX = player.x; player.fromY = player.y;
     player.toX = targetIsl.x; player.toY = targetIsl.y;
     player.jumpT = 0;
@@ -585,9 +558,8 @@ export default function App() {
     player.angle = Math.atan2(targetIsl.y - player.y, targetIsl.x - player.x);
     player.squishX = 0.7; player.squishY = 1.4;
     player.islandIdx = -1;
-
-    // Store target for landing resolution
-    (player as Frog & { _target: number })._target = tappedIdx;
+    player.jumping = true;
+    player.targetIsland = tappedIdx;
 
     phaseRef.current = "jumping";
     setPhase("jumping");
@@ -635,7 +607,6 @@ export default function App() {
       player.x = player.fromX + (player.toX - player.fromX) * jt;
       player.y = arcY(player.fromY, player.toY, jd, jt);
 
-      // squash & stretch
       if (jt < 0.5) {
         player.squishX = lerp(0.7, 1.3, jt * 2);
         player.squishY = lerp(1.4, 0.7, jt * 2);
@@ -645,8 +616,7 @@ export default function App() {
       }
 
       if (player.jumpT >= 1) {
-        // Landing
-        const targetIdx = (player as Frog & { _target?: number })._target ?? -1;
+        const targetIdx = player.targetIsland;
         if (targetIdx === -1) {
           killPlayer("water");
         } else {
@@ -654,16 +624,14 @@ export default function App() {
           if (!targetIsl || (targetIsl.sinking && targetIsl.sinkT > 0.7)) {
             killPlayer("water");
           } else {
-            // Check rival frog collision
+            // Check rival collision
             let rivalHit = false;
             for (let fi = 1; fi < frogs.length; fi++) {
               const rival = frogs[fi]!;
-              if (rival.islandIdx === targetIdx && rival.alive) {
+              if (rival.alive && rival.islandIdx === targetIdx) {
                 rivalHit = true;
-                // Both fall in — fish eats them
                 rival.alive = false;
                 rival.islandIdx = -1;
-                // Spawn fish at that spot
                 spawnFishAt(targetIsl.x, targetIsl.y + targetIsl.wobble);
                 burst(particles, targetIsl.x, targetIsl.y, "#1565c0", 14);
                 addRipple(ripples, targetIsl.x, targetIsl.y);
@@ -676,12 +644,13 @@ export default function App() {
             }
 
             if (!rivalHit) {
-              // Successful landing
               player.islandIdx = targetIdx;
               player.x = targetIsl.x;
               player.y = targetIsl.y;
               player.squishX = 1.3; player.squishY = 0.7;
               player.angle = 0;
+              player.jumping = false;
+              player.targetIsland = -1;
 
               const newScore = scoreRef.current + 1;
               scoreRef.current = newScore;
@@ -689,11 +658,8 @@ export default function App() {
               addRipple(ripples, player.x, player.y);
               burst(particles, player.x, player.y, "#4caf50", 5);
               playBloop(520, 0.12);
-
-              // Float score
               floats.push({ x: player.x, y: player.y - 30, vy: -50, alpha: 1, text: `+1`, color: "#ffd54f" });
 
-              // Win?
               if (targetIdx === islands.length - 1) {
                 phaseRef.current = "won";
                 setPhase("won");
@@ -710,10 +676,139 @@ export default function App() {
       }
     }
 
-    // squish recovery when idle
+    // squish recovery
     if (player && player.alive && phaseRef.current === "idle") {
       player.squishX = lerp(player.squishX, 1, dt * 9);
       player.squishY = lerp(player.squishY, 1, dt * 9);
+    }
+
+    // ── rival frog AI ──────────────────────────────────────────────────────
+    for (let fi = 1; fi < frogs.length; fi++) {
+      const rival = frogs[fi]!;
+      if (!rival.alive) continue;
+
+      if (!rival.jumping) {
+        // Count down hop timer
+        rival.hopTimer -= dt;
+        if (rival.hopTimer <= 0) {
+          // Try to find a nearby empty island to hop to
+          const candidates: number[] = [];
+          for (let ii = 0; ii < islands.length; ii++) {
+            if (ii === rival.islandIdx) continue;
+            const isl = islands[ii]!;
+            if (isl.sinking && isl.sinkT > 0.5) continue;
+            const d = dist(rival.x, rival.y, isl.x, isl.y);
+            if (d > RIVAL_HOP_RANGE) continue;
+            // Check no other frog (rival or player) is sitting there
+            let occupied = false;
+            for (let fj = 0; fj < frogs.length; fj++) {
+              if (fj === fi) continue;
+              const other = frogs[fj]!;
+              if (other.alive && other.islandIdx === ii) { occupied = true; break; }
+            }
+            if (!occupied) candidates.push(ii);
+          }
+
+          if (candidates.length > 0) {
+            // Pick a random candidate
+            const pick = candidates[Math.floor(Math.random() * candidates.length)]!;
+            const targetIsl = islands[pick]!;
+            rival.fromX = rival.x; rival.fromY = rival.y;
+            rival.toX = targetIsl.x; rival.toY = targetIsl.y;
+            const d = dist(rival.x, rival.y, targetIsl.x, targetIsl.y);
+            rival.jumpT = 0;
+            rival.jumpDuration = clamp(d / 380, 0.28, 0.75);
+            rival.angle = Math.atan2(targetIsl.y - rival.y, targetIsl.x - rival.x);
+            rival.squishX = 0.7; rival.squishY = 1.4;
+            rival.islandIdx = -1;
+            rival.jumping = true;
+            rival.targetIsland = pick;
+            addRipple(ripples, rival.x, rival.y);
+          }
+
+          // Reset timer whether or not we jumped
+          rival.hopTimer = randBetween(3, 7);
+        }
+      } else {
+        // Rival mid-jump
+        rival.jumpT = Math.min(rival.jumpT + dt / rival.jumpDuration, 1);
+        const jt = rival.jumpT;
+        const jd = dist(rival.fromX, rival.fromY, rival.toX, rival.toY);
+        rival.x = rival.fromX + (rival.toX - rival.fromX) * jt;
+        rival.y = arcY(rival.fromY, rival.toY, jd, jt);
+
+        // squash & stretch
+        if (jt < 0.5) {
+          rival.squishX = lerp(0.7, 1.3, jt * 2);
+          rival.squishY = lerp(1.4, 0.7, jt * 2);
+        } else {
+          rival.squishX = lerp(1.3, 1.0, (jt - 0.5) * 2);
+          rival.squishY = lerp(0.7, 1.0, (jt - 0.5) * 2);
+        }
+
+        if (rival.jumpT >= 1) {
+          const targetIdx = rival.targetIsland;
+          const targetIsl = targetIdx >= 0 ? islands[targetIdx] : undefined;
+
+          // Check if player is now on that island (rival lands on player)
+          if (
+            targetIsl &&
+            player && player.alive &&
+            player.islandIdx === targetIdx &&
+            phaseRef.current !== "dead" &&
+            phaseRef.current !== "won"
+          ) {
+            // Both get eaten
+            rival.alive = false;
+            rival.islandIdx = -1;
+            spawnFishAt(targetIsl.x, targetIsl.y + targetIsl.wobble);
+            burst(particles, targetIsl.x, targetIsl.y, "#1565c0", 14);
+            addRipple(ripples, targetIsl.x, targetIsl.y);
+            playSplash();
+            floats.push({ x: targetIsl.x, y: targetIsl.y - 30, vy: -55, alpha: 1, text: "🐟 GULP!", color: "#e3f2fd" });
+            killPlayer("fish");
+          } else if (targetIsl) {
+            // Check if another rival is there (two rivals collide — both drown quietly)
+            let collision = false;
+            for (let fj = 1; fj < frogs.length; fj++) {
+              if (fj === fi) continue;
+              const other = frogs[fj]!;
+              if (other.alive && other.islandIdx === targetIdx) {
+                collision = true;
+                other.alive = false;
+                other.islandIdx = -1;
+                rival.alive = false;
+                rival.islandIdx = -1;
+                addRipple(ripples, targetIsl.x, targetIsl.y);
+                burst(particles, targetIsl.x, targetIsl.y, "#7ecdc2", 6);
+                break;
+              }
+            }
+            if (!collision) {
+              rival.islandIdx = targetIdx;
+              rival.x = targetIsl.x;
+              rival.y = targetIsl.y;
+              rival.jumping = false;
+              rival.targetIsland = -1;
+              rival.squishX = 1.2; rival.squishY = 0.8;
+              rival.angle = 0;
+              addRipple(ripples, rival.x, rival.y);
+            }
+          } else {
+            // Missed / fell in water
+            rival.alive = false;
+            rival.islandIdx = -1;
+            addRipple(ripples, rival.x, rival.y);
+            burst(particles, rival.x, rival.y, "#7ecdc2", 5);
+          }
+        }
+      }
+
+      // Rival squish recovery when sitting
+      if (!rival.jumping && rival.alive) {
+        rival.squishX = lerp(rival.squishX, 1, dt * 8);
+        rival.squishY = lerp(rival.squishY, 1, dt * 8);
+      }
     }
 
     // ── bird spawning ──────────────────────────────────────────────────────
@@ -732,7 +827,6 @@ export default function App() {
         bird.x += bird.vx * dt;
         bird.y += bird.vy * dt;
 
-        // Decide to dive at player?
         if (player && player.alive && phaseRef.current !== "dead" && phaseRef.current !== "won") {
           const d = dist(bird.x, bird.y, player.x, player.y);
           if (d < 200 && Math.abs(bird.x - player.x) < 160) {
@@ -743,7 +837,6 @@ export default function App() {
           }
         }
 
-        // Leave screen
         if (bird.x < -100 || bird.x > W + 100) birds.splice(bi, 1);
 
       } else if (bird.phase === "diving") {
@@ -753,7 +846,6 @@ export default function App() {
         bird.x = lerp(startX, bird.strikeX, bird.diveT);
         bird.y = lerp(startY, bird.strikeY - 10, bird.diveT);
 
-        // Hit player?
         if (player && player.alive) {
           const d = dist(bird.x, bird.y, player.x, player.y);
           if (d < 28) {
@@ -776,7 +868,7 @@ export default function App() {
         bird.x += bird.vx * dt;
         bird.y += bird.vy * dt;
         bird.vy = lerp(bird.vy, 0, dt * 3);
-        if (bird.y < 60) { bird.phase = "leaving"; }
+        if (bird.y < 60) bird.phase = "leaving";
 
       } else if (bird.phase === "leaving") {
         bird.x += bird.vx * dt;
@@ -839,10 +931,8 @@ export default function App() {
     ctx.clearRect(0, 0, W, H);
     drawWater(ctx, W, H, t);
 
-    // Ripples
     for (const rip of ripples) drawRipple(ctx, rip);
 
-    // Islands + frogs on them (back-to-front by y)
     const sorted = islands
       .map((isl, i) => ({ isl, i }))
       .sort((a, b) => a.isl.y - b.isl.y);
@@ -852,12 +942,10 @@ export default function App() {
       if (alpha <= 0) continue;
       drawIsland(ctx, isl, alpha);
 
-      // Goal flower on last island
       if (i === islands.length - 1 && phaseRef.current !== "won") {
         drawGoalFlower(ctx, isl, t);
       }
 
-      // Glow on player's current island
       if (player && i === player.islandIdx && phaseRef.current === "idle") {
         ctx.save();
         ctx.globalAlpha = 0.22 + Math.sin(t * 3) * 0.08;
@@ -866,7 +954,7 @@ export default function App() {
         ctx.restore();
       }
 
-      // Rival frogs sitting on islands
+      // Rival frogs sitting on this island
       for (let fi = 1; fi < frogs.length; fi++) {
         const rival = frogs[fi]!;
         if (rival.alive && rival.islandIdx === i) {
@@ -881,6 +969,14 @@ export default function App() {
     // Particles
     for (const p of particles) drawParticle(ctx, p);
 
+    // Rival frogs mid-jump (draw above islands)
+    for (let fi = 1; fi < frogs.length; fi++) {
+      const rival = frogs[fi]!;
+      if (rival.alive && rival.jumping) {
+        drawFrog(ctx, rival, t, 0, 1);
+      }
+    }
+
     // Player frog
     if (player && player.alive) {
       const onIsl = player.islandIdx >= 0 ? (islands[player.islandIdx] ?? null) : null;
@@ -888,13 +984,13 @@ export default function App() {
       drawFrog(ctx, player, t, wobOff, 1);
     }
 
-    // Birds (on top)
+    // Birds on top
     for (const bird of birds) drawBird(ctx, bird);
 
     // Float texts
     for (const ft of floats) drawFloatText(ctx, ft);
 
-    // ── tap-target highlights ──────────────────────────────────────────────
+    // Tap-target highlights
     if (phaseRef.current === "idle" && player) {
       for (let i = 0; i < islands.length; i++) {
         if (i === player.islandIdx) continue;
@@ -980,7 +1076,7 @@ export default function App() {
               Reach the flower 🌸 — avoid birds 🦅 and rival frogs!
             </p>
             <p className="text-xs mt-0.5" style={{ color: "#ef9a9a" }}>
-              Land on another frog and you both get eaten by a fish 🐟
+              Land on a rival frog and you both get eaten by a fish 🐟
             </p>
           </div>
         )}

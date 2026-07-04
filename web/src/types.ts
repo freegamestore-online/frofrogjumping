@@ -29,6 +29,10 @@ export interface Frog {
   isPlayer: boolean;
   color: string;
   eyeColor: string;
+  // rival-only fields
+  hopTimer: number;    // countdown until next hop attempt
+  jumping: boolean;    // is rival currently mid-jump?
+  targetIsland: number; // where the rival is jumping to (-1 = none)
 }
 
 export interface Bird {

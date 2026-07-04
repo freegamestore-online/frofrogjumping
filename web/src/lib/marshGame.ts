@@ -4,6 +4,7 @@ export const ISLAND_TYPES = ["lily", "log", "rock"] as const;
 export const SINK_TIME = 3.0;
 export const MAX_JUMP_DIST = 340;
 export const GRAVITY_PEAK = 0.52;
+export const RIVAL_HOP_RANGE = 280; // max dist a rival will hop
 
 export function randBetween(a: number, b: number) {
   return a + Math.random() * (b - a);
@@ -79,11 +80,11 @@ export function generateIslands(
 
 // ── frog factory ───────────────────────────────────────────────────────────
 const RIVAL_COLORS = [
-  { body: "#e57373", dark: "#c62828", belly: "#ffcdd2", eye: "#fff9c4" },
-  { body: "#ffb74d", dark: "#e65100", belly: "#ffe0b2", eye: "#f3e5f5" },
-  { body: "#ba68c8", dark: "#6a1b9a", belly: "#e1bee7", eye: "#fff9c4" },
-  { body: "#4dd0e1", dark: "#00838f", belly: "#b2ebf2", eye: "#fff9c4" },
-  { body: "#fff176", dark: "#f9a825", belly: "#fffde7", eye: "#e8f5e9" },
+  { body: "#e57373", eye: "#fff9c4" },
+  { body: "#ffb74d", eye: "#f3e5f5" },
+  { body: "#ba68c8", eye: "#fff9c4" },
+  { body: "#4dd0e1", eye: "#fff9c4" },
+  { body: "#fff176", eye: "#e8f5e9" },
 ];
 
 export function makePlayerFrog(x: number, y: number, islandIdx: number): Frog {
@@ -93,6 +94,7 @@ export function makePlayerFrog(x: number, y: number, islandIdx: number): Frog {
     squishX: 1, squishY: 1,
     islandIdx, alive: true, isPlayer: true,
     color: "#56c56e", eyeColor: "#fffde7",
+    hopTimer: 0, jumping: false, targetIsland: -1,
   };
 }
 
@@ -104,6 +106,8 @@ export function makeRivalFrog(x: number, y: number, islandIdx: number): Frog {
     squishX: 1, squishY: 1,
     islandIdx, alive: true, isPlayer: false,
     color: palette.body, eyeColor: palette.eye,
+    hopTimer: randBetween(2, 6), // stagger starts
+    jumping: false, targetIsland: -1,
   };
 }
 

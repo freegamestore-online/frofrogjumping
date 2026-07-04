@@ -2,61 +2,50 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import { GameShell, GameTopbar } from "@freegamestore/games";
 import { useGameLoop } from "./hooks/useGameLoop";
 import { useHighScore } from "./hooks/useHighScore";
-import { drawGlow, drawText, lerp, clamp } from "./lib/canvas";
+import { drawGlow, lerp, clamp } from "./lib/canvas";
 import {
-  generateIslands, makeFrog, addRipple, burstParticles, arcY,
-  dist, randBetween, SINK_TIME,
+  generateIslands, makePlayerFrog, makeRivalFrog, makeBird, makeFish,
+  dist, randBetween, arcY, SINK_TIME,
 } from "./lib/marshGame";
-import type { Island, Frog, Ripple, Fly, Particle } from "./types";
+import type { Island, Frog, Bird, Fish, Ripple, Particle, FloatText, DeathCause } from "./types";
 
-// ── palette ────────────────────────────────────────────────────────────────
+// ─── palette ────────────────────────────────────────────────────────────────
 const C = {
-  water1:  "#3a7d6e",
-  water2:  "#2d6359",
-  lily:    "#4caf50",
-  lilyDk:  "#388e3c",
-  lilyVn:  "#81c784",
-  log:     "#8d6e4a",
-  logDk:   "#5d4037",
-  rock:    "#78909c",
-  rockDk:  "#546e7a",
-  frogBod: "#56c56e",
-  frogDk:  "#3d9e52",
-  frogBly: "#a5d6a7",
-  frogEye: "#fffde7",
-  frogPup: "#212121",
-  tongue:  "#e53935",
-  aim:     "#ffffff",
-  fly:     "#1a1a1a",
-  ripple:  "#7ecdc2",
-  splash:  "#b2dfdb",
-  gold:    "#ffd54f",
+  water1: "#2e7d6b", water2: "#1b5e50",
+  lily: "#4caf50", lilyDk: "#388e3c", lilyVn: "#81c784",
+  log: "#8d6e4a", logDk: "#5d4037",
+  rock: "#78909c", rockDk: "#546e7a",
+  frogDk: "#3d9e52", frogBly: "#a5d6a7",
+  frogPup: "#1a1a1a",
+  ripple: "#7ecdc2",
+  gold: "#ffd54f",
+  birdBody: "#8d6e4a", birdWing: "#6d4c41", birdBeak: "#ff8f00",
+  fishBody: "#1565c0", fishBelly: "#e3f2fd", fishEye: "#fff",
 };
 
-// ── water ripple pattern ───────────────────────────────────────────────────
-const BG_RIPPLES = Array.from({ length: 18 }, (_, i) => ({
+// ─── BG water lines ─────────────────────────────────────────────────────────
+const BG_LINES = Array.from({ length: 20 }, (_, i) => ({
   x: (i * 137.5) % 1,
-  y: ((i * 79.3) % 1),
+  y: (i * 79.3) % 1,
   phase: Math.random() * Math.PI * 2,
-  speed: 0.4 + Math.random() * 0.6,
+  speed: 0.35 + Math.random() * 0.5,
 }));
 
-// ── drawing ────────────────────────────────────────────────────────────────
+// ─── drawing helpers ─────────────────────────────────────────────────────────
+
 function drawWater(ctx: CanvasRenderingContext2D, W: number, H: number, t: number) {
-  // Base
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, C.water1);
-  grad.addColorStop(1, C.water2);
-  ctx.fillStyle = grad;
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, C.water1);
+  g.addColorStop(1, C.water2);
+  ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 
-  // Animated surface lines
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.strokeStyle = "rgba(255,255,255,0.055)";
   ctx.lineWidth = 1.5;
-  for (const r of BG_RIPPLES) {
+  for (const r of BG_LINES) {
     const x = r.x * W;
-    const y = r.y * H + Math.sin(t * r.speed + r.phase) * 4;
-    const len = 20 + Math.sin(t * 0.5 + r.phase) * 10;
+    const y = r.y * H + Math.sin(t * r.speed + r.phase) * 5;
+    const len = 18 + Math.sin(t * 0.4 + r.phase) * 9;
     ctx.beginPath();
     ctx.moveTo(x - len / 2, y);
     ctx.lineTo(x + len / 2, y);
@@ -64,38 +53,34 @@ function drawWater(ctx: CanvasRenderingContext2D, W: number, H: number, t: numbe
   }
 }
 
-function drawIsland(ctx: CanvasRenderingContext2D, isl: Island, alpha = 1) {
+function drawIsland(ctx: CanvasRenderingContext2D, isl: Island, alpha: number) {
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(isl.x, isl.y + isl.wobble);
 
   if (isl.type === "lily") {
-    // Shadow
     ctx.beginPath();
-    ctx.ellipse(2, 4, isl.r * 0.9, isl.r * 0.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(3, 5, isl.r * 0.88, isl.r * 0.45, 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.fill();
 
-    // Pad body
     ctx.beginPath();
     ctx.arc(0, 0, isl.r, 0, Math.PI * 2);
     ctx.fillStyle = C.lily;
     ctx.fill();
 
-    // Notch
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.arc(0, 0, isl.r, -Math.PI * 0.15, Math.PI * 0.15);
+    ctx.arc(0, 0, isl.r, -0.18, 0.18);
     ctx.closePath();
     ctx.fillStyle = C.lilyDk;
     ctx.fill();
 
-    // Veins
     ctx.strokeStyle = C.lilyVn;
-    ctx.lineWidth = 1.2;
-    ctx.globalAlpha = alpha * 0.5;
+    ctx.lineWidth = 1.1;
+    ctx.globalAlpha = alpha * 0.45;
     for (let i = 0; i < 5; i++) {
-      const a = (-Math.PI * 0.7) + (i / 4) * Math.PI * 1.4;
+      const a = -Math.PI * 0.7 + (i / 4) * Math.PI * 1.4;
       ctx.beginPath();
       ctx.moveTo(0, 0);
       ctx.lineTo(Math.cos(a) * isl.r * 0.9, Math.sin(a) * isl.r * 0.9);
@@ -103,62 +88,43 @@ function drawIsland(ctx: CanvasRenderingContext2D, isl: Island, alpha = 1) {
     }
     ctx.globalAlpha = alpha;
 
-    // Flower (on goal island)
-    // drawn separately if needed
-
   } else if (isl.type === "log") {
-    // Shadow
     ctx.beginPath();
-    ctx.ellipse(3, 6, isl.r * 1.1, isl.r * 0.45, 0, 0, Math.PI * 2);
+    ctx.ellipse(3, 6, isl.r * 1.1, isl.r * 0.42, 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,0.2)";
     ctx.fill();
 
-    // Log cylinder top
     ctx.beginPath();
-    ctx.ellipse(0, 0, isl.r, isl.r * 0.42, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, isl.r, isl.r * 0.4, 0, 0, Math.PI * 2);
     ctx.fillStyle = C.log;
     ctx.fill();
     ctx.strokeStyle = C.logDk;
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Rings
-    ctx.strokeStyle = C.logDk;
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = alpha * 0.4;
+    ctx.globalAlpha = alpha * 0.35;
     for (let i = 1; i <= 3; i++) {
       ctx.beginPath();
-      ctx.ellipse(0, 0, (isl.r * i) / 3.5, (isl.r * i) / 3.5 * 0.42, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, (isl.r * i) / 3.5, (isl.r * i) / 3.5 * 0.4, 0, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.globalAlpha = alpha;
 
   } else {
-    // Rock shadow
     ctx.beginPath();
-    ctx.ellipse(4, 6, isl.r * 0.85, isl.r * 0.4, 0, 0, Math.PI * 2);
+    ctx.ellipse(4, 6, isl.r * 0.85, isl.r * 0.38, 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,0.22)";
     ctx.fill();
 
-    // Rock body
     ctx.beginPath();
     ctx.arc(0, 0, isl.r, 0, Math.PI * 2);
     ctx.fillStyle = C.rock;
     ctx.fill();
 
-    // Highlight
     ctx.beginPath();
-    ctx.arc(-isl.r * 0.25, -isl.r * 0.3, isl.r * 0.35, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.15)";
+    ctx.arc(-isl.r * 0.25, -isl.r * 0.28, isl.r * 0.33, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.14)";
     ctx.fill();
-
-    // Dark side
-    ctx.beginPath();
-    ctx.arc(isl.r * 0.2, isl.r * 0.25, isl.r * 0.45, 0, Math.PI * 2);
-    ctx.fillStyle = C.rockDk;
-    ctx.globalAlpha = alpha * 0.35;
-    ctx.fill();
-    ctx.globalAlpha = alpha;
   }
 
   ctx.restore();
@@ -166,200 +132,240 @@ function drawIsland(ctx: CanvasRenderingContext2D, isl: Island, alpha = 1) {
 
 function drawGoalFlower(ctx: CanvasRenderingContext2D, isl: Island, t: number) {
   ctx.save();
-  ctx.translate(isl.x, isl.y + isl.wobble - isl.r * 0.3);
-  const bob = Math.sin(t * 1.8) * 2;
-  ctx.translate(0, bob);
-
-  // Petals
-  const pColors = ["#f48fb1", "#f06292", "#ff80ab", "#f48fb1", "#f8bbd0"];
+  ctx.translate(isl.x, isl.y + isl.wobble - isl.r * 0.3 + Math.sin(t * 1.9) * 2);
+  const petals = ["#f48fb1", "#f06292", "#ff80ab", "#f48fb1", "#f8bbd0"];
   for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2;
     ctx.save();
-    ctx.rotate(a);
+    ctx.rotate((i / 5) * Math.PI * 2);
     ctx.beginPath();
     ctx.ellipse(0, -8, 4, 7, 0, 0, Math.PI * 2);
-    ctx.fillStyle = pColors[i % pColors.length] ?? "#f48fb1";
+    ctx.fillStyle = petals[i % petals.length] ?? "#f48fb1";
     ctx.fill();
     ctx.restore();
   }
-  // Center
   ctx.beginPath();
   ctx.arc(0, 0, 5, 0, Math.PI * 2);
   ctx.fillStyle = C.gold;
   ctx.fill();
-
   ctx.restore();
 }
 
-function drawFrog(ctx: CanvasRenderingContext2D, frog: Frog, t: number) {
+function drawFrog(
+  ctx: CanvasRenderingContext2D,
+  frog: Frog,
+  t: number,
+  wobbleOffset: number,
+  sinkAlpha: number,
+) {
   ctx.save();
-  ctx.translate(frog.x, frog.y);
+  ctx.globalAlpha = sinkAlpha;
+  ctx.translate(frog.x, frog.y + wobbleOffset);
   ctx.rotate(frog.angle);
   ctx.scale(frog.squishX, frog.squishY);
 
-  const r = 16;
+  const r = 15;
+  const bodyColor = frog.color;
+  const darkColor = frog.isPlayer ? C.frogDk : darken(bodyColor);
+  const bellyColor = frog.isPlayer ? C.frogBly : lighten(bodyColor);
 
-  // Shadow (only when on ground)
+  // Shadow when sitting
   if (frog.jumpT >= 1) {
     ctx.beginPath();
-    ctx.ellipse(2, r * 0.8, r * 0.7 * frog.squishX, r * 0.25, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.ellipse(2, r * 0.85, r * 0.65, r * 0.22, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
     ctx.fill();
   }
 
   // Hind legs
-  const legBob = Math.sin(t * 6) * (frog.jumpT < 1 ? 3 : 1);
-  ctx.fillStyle = C.frogDk;
-  // Left hind
+  const legBob = frog.jumpT < 1 ? Math.sin(t * 14) * 2 : 0;
+  ctx.fillStyle = darkColor;
   ctx.beginPath();
-  ctx.ellipse(-r * 0.9, r * 0.55 + legBob, 7, 5, Math.PI * 0.35, 0, Math.PI * 2);
+  ctx.ellipse(-r * 0.88, r * 0.52 + legBob, 7, 4.5, Math.PI * 0.35, 0, Math.PI * 2);
   ctx.fill();
-  // Right hind
   ctx.beginPath();
-  ctx.ellipse(r * 0.9, r * 0.55 + legBob, 7, 5, -Math.PI * 0.35, 0, Math.PI * 2);
+  ctx.ellipse(r * 0.88, r * 0.52 + legBob, 7, 4.5, -Math.PI * 0.35, 0, Math.PI * 2);
   ctx.fill();
 
   // Body
   ctx.beginPath();
-  ctx.ellipse(0, 0, r, r * 0.85, 0, 0, Math.PI * 2);
-  ctx.fillStyle = C.frogBod;
+  ctx.ellipse(0, 0, r, r * 0.83, 0, 0, Math.PI * 2);
+  ctx.fillStyle = bodyColor;
   ctx.fill();
 
   // Belly
   ctx.beginPath();
-  ctx.ellipse(0, r * 0.2, r * 0.6, r * 0.5, 0, 0, Math.PI * 2);
-  ctx.fillStyle = C.frogBly;
+  ctx.ellipse(0, r * 0.18, r * 0.58, r * 0.48, 0, 0, Math.PI * 2);
+  ctx.fillStyle = bellyColor;
   ctx.fill();
 
   // Front legs
-  ctx.fillStyle = C.frogDk;
+  ctx.fillStyle = darkColor;
   ctx.beginPath();
-  ctx.ellipse(-r * 0.75, r * 0.1, 5, 4, Math.PI * 0.2, 0, Math.PI * 2);
+  ctx.ellipse(-r * 0.72, r * 0.08, 4.5, 3.5, Math.PI * 0.2, 0, Math.PI * 2);
   ctx.fill();
   ctx.beginPath();
-  ctx.ellipse(r * 0.75, r * 0.1, 5, 4, -Math.PI * 0.2, 0, Math.PI * 2);
+  ctx.ellipse(r * 0.72, r * 0.08, 4.5, 3.5, -Math.PI * 0.2, 0, Math.PI * 2);
   ctx.fill();
 
   // Eyes
-  const eyeY = -r * 0.45;
-  for (const ex of [-r * 0.45, r * 0.45]) {
-    // Eye bulge
+  for (const ex of [-r * 0.43, r * 0.43]) {
+    const ey = -r * 0.44;
     ctx.beginPath();
-    ctx.arc(ex, eyeY, 6, 0, Math.PI * 2);
-    ctx.fillStyle = C.frogBod;
+    ctx.arc(ex, ey, 6, 0, Math.PI * 2);
+    ctx.fillStyle = bodyColor;
     ctx.fill();
-    // White
     ctx.beginPath();
-    ctx.arc(ex, eyeY, 4.5, 0, Math.PI * 2);
-    ctx.fillStyle = C.frogEye;
+    ctx.arc(ex, ey, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = frog.eyeColor;
     ctx.fill();
-    // Pupil
     ctx.beginPath();
-    ctx.arc(ex + 1, eyeY + 1, 2.5, 0, Math.PI * 2);
+    ctx.arc(ex + 1, ey + 1, 2.4, 0, Math.PI * 2);
     ctx.fillStyle = C.frogPup;
     ctx.fill();
-    // Shine
     ctx.beginPath();
-    ctx.arc(ex + 0.5, eyeY - 0.5, 1, 0, Math.PI * 2);
+    ctx.arc(ex + 0.4, ey - 0.5, 0.9, 0, Math.PI * 2);
     ctx.fillStyle = "#fff";
     ctx.fill();
   }
 
-  // Tongue
-  if (frog.tongueOut) {
-    const tLen = frog.tongueT * 28;
-    ctx.strokeStyle = C.tongue;
-    ctx.lineWidth = 4;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(0, -r * 0.3);
-    ctx.lineTo(0, -r * 0.3 - tLen);
-    ctx.stroke();
-    if (frog.tongueT > 0.5) {
-      ctx.beginPath();
-      ctx.arc(0, -r * 0.3 - tLen, 4, 0, Math.PI * 2);
-      ctx.fillStyle = C.tongue;
-      ctx.fill();
-    }
-  }
-
   ctx.restore();
 }
 
-function drawAimArrow(
-  ctx: CanvasRenderingContext2D,
-  fx: number, fy: number,
-  tx: number, ty: number,
-  canReach: boolean,
-) {
-  const dx = tx - fx, dy = ty - fy;
-  const d = Math.sqrt(dx * dx + dy * dy);
-  if (d < 10) return;
-
-  const angle = Math.atan2(dy, dx);
-  const dotCount = 8;
-  const step = Math.min(d / dotCount, 28);
-
-  ctx.save();
-  for (let i = 1; i <= dotCount; i++) {
-    const t = i / dotCount;
-    const px = fx + Math.cos(angle) * step * i;
-    const py = fy + Math.sin(angle) * step * i;
-    const alpha = canReach ? (1 - t * 0.5) : (1 - t * 0.7) * 0.5;
-    ctx.beginPath();
-    ctx.arc(px, py, 3, 0, Math.PI * 2);
-    ctx.fillStyle = canReach
-      ? `rgba(255,255,255,${alpha})`
-      : `rgba(255,80,80,${alpha})`;
-    ctx.fill();
-  }
-
-  // Arrowhead
-  if (canReach) {
-    const ax = fx + Math.cos(angle) * Math.min(d, step * dotCount);
-    const ay = fy + Math.sin(angle) * Math.min(d, step * dotCount);
-    ctx.translate(ax, ay);
-    ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.moveTo(8, 0);
-    ctx.lineTo(-4, -4);
-    ctx.lineTo(-4, 4);
-    ctx.closePath();
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.fill();
-  }
-
-  ctx.restore();
+// simple color helpers (no external deps)
+function darken(hex: string): string {
+  const n = parseInt(hex.replace("#", ""), 16);
+  const r = Math.max(0, ((n >> 16) & 0xff) - 50);
+  const g = Math.max(0, ((n >> 8) & 0xff) - 50);
+  const b = Math.max(0, (n & 0xff) - 50);
+  return `rgb(${r},${g},${b})`;
+}
+function lighten(hex: string): string {
+  const n = parseInt(hex.replace("#", ""), 16);
+  const r = Math.min(255, ((n >> 16) & 0xff) + 60);
+  const g = Math.min(255, ((n >> 8) & 0xff) + 60);
+  const b = Math.min(255, (n & 0xff) + 60);
+  return `rgb(${r},${g},${b})`;
 }
 
-function drawFly(ctx: CanvasRenderingContext2D, fly: Fly, islands: Island[]) {
-  const isl = islands[fly.islandIdx];
-  if (!isl) return;
+function drawBird(ctx: CanvasRenderingContext2D, bird: Bird) {
   ctx.save();
-  ctx.translate(fly.x, fly.y + isl.wobble);
+  ctx.translate(bird.x, bird.y);
+  // face direction of travel
+  if (bird.vx < 0) ctx.scale(-1, 1);
 
-  const wingFlap = Math.sin(fly.wingT * 18) * 0.4;
-
-  // Wings
-  ctx.save();
-  ctx.rotate(-wingFlap);
-  ctx.beginPath();
-  ctx.ellipse(-5, -3, 6, 3, -0.3, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(200,230,255,0.7)";
-  ctx.fill();
-  ctx.restore();
-  ctx.save();
-  ctx.rotate(wingFlap);
-  ctx.beginPath();
-  ctx.ellipse(5, -3, 6, 3, 0.3, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(200,230,255,0.7)";
-  ctx.fill();
-  ctx.restore();
+  const wingFlap = bird.phase === "soaring"
+    ? Math.sin(bird.wingT * 6) * 0.55
+    : bird.phase === "diving"
+      ? 0.2
+      : Math.sin(bird.wingT * 9) * 0.7;
 
   // Body
   ctx.beginPath();
-  ctx.ellipse(0, 0, 3, 4, 0, 0, Math.PI * 2);
-  ctx.fillStyle = C.fly;
+  ctx.ellipse(0, 0, 18, 8, 0, 0, Math.PI * 2);
+  ctx.fillStyle = C.birdBody;
+  ctx.fill();
+
+  // Upper wing
+  ctx.save();
+  ctx.rotate(-wingFlap);
+  ctx.beginPath();
+  ctx.ellipse(-4, -2, 20, 6, -0.25, 0, Math.PI * 2);
+  ctx.fillStyle = C.birdWing;
+  ctx.fill();
+  ctx.restore();
+
+  // Lower wing
+  ctx.save();
+  ctx.rotate(wingFlap * 0.4);
+  ctx.beginPath();
+  ctx.ellipse(-4, 4, 16, 4, 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = C.birdWing;
+  ctx.fill();
+  ctx.restore();
+
+  // Head
+  ctx.beginPath();
+  ctx.arc(16, -3, 7, 0, Math.PI * 2);
+  ctx.fillStyle = C.birdBody;
+  ctx.fill();
+
+  // Beak
+  ctx.beginPath();
+  ctx.moveTo(22, -3);
+  ctx.lineTo(34, -1);
+  ctx.lineTo(22, 1);
+  ctx.closePath();
+  ctx.fillStyle = C.birdBeak;
+  ctx.fill();
+
+  // Eye
+  ctx.beginPath();
+  ctx.arc(18, -5, 2.5, 0, Math.PI * 2);
+  ctx.fillStyle = "#fff";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(18.5, -5, 1.3, 0, Math.PI * 2);
+  ctx.fillStyle = "#111";
+  ctx.fill();
+
+  // Dive indicator — red glint eyes when diving
+  if (bird.phase === "diving") {
+    ctx.beginPath();
+    ctx.arc(18.5, -5, 1.3, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff1744";
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawFish(ctx: CanvasRenderingContext2D, fish: Fish) {
+  if (fish.phase === "hidden") return;
+  ctx.save();
+  ctx.translate(fish.x, fish.y);
+
+  const scaleY = fish.phase === "rising" || fish.phase === "snapping" ? 1 : 0.6;
+  ctx.scale(1, scaleY);
+
+  // Tail
+  ctx.beginPath();
+  ctx.moveTo(-28, 0);
+  ctx.lineTo(-44, -14);
+  ctx.lineTo(-44, 14);
+  ctx.closePath();
+  ctx.fillStyle = C.fishBody;
+  ctx.fill();
+
+  // Body
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 30, 14, 0, 0, Math.PI * 2);
+  ctx.fillStyle = C.fishBody;
+  ctx.fill();
+
+  // Belly
+  ctx.beginPath();
+  ctx.ellipse(4, 4, 20, 8, 0, 0, Math.PI * 2);
+  ctx.fillStyle = C.fishBelly;
+  ctx.fill();
+
+  // Mouth (opens on snap)
+  const mouthGape = fish.mouthOpen * 22;
+  ctx.beginPath();
+  ctx.moveTo(28, 0);
+  ctx.lineTo(28 + mouthGape * 0.3, -mouthGape * 0.5);
+  ctx.lineTo(28 + mouthGape * 0.3, mouthGape * 0.5);
+  ctx.closePath();
+  ctx.fillStyle = "#e53935";
+  ctx.fill();
+
+  // Eye
+  ctx.beginPath();
+  ctx.arc(14, -5, 5, 0, Math.PI * 2);
+  ctx.fillStyle = C.fishEye;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(15, -5, 2.5, 0, Math.PI * 2);
+  ctx.fillStyle = "#111";
   ctx.fill();
 
   ctx.restore();
@@ -374,233 +380,222 @@ function drawRipple(ctx: CanvasRenderingContext2D, rip: Ripple) {
 }
 
 function drawParticle(ctx: CanvasRenderingContext2D, p: Particle) {
+  ctx.save();
+  ctx.globalAlpha = p.alpha;
   ctx.beginPath();
   ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-  ctx.fillStyle = p.color.replace(")", `,${p.alpha})`).replace("rgb", "rgba");
-  ctx.globalAlpha = p.alpha;
+  ctx.fillStyle = p.color;
   ctx.fill();
-  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
-// ── main component ─────────────────────────────────────────────────────────
+function drawFloatText(ctx: CanvasRenderingContext2D, ft: FloatText) {
+  ctx.save();
+  ctx.globalAlpha = ft.alpha;
+  ctx.font = "bold 18px Manrope, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = ft.color;
+  ctx.shadowColor = "rgba(0,0,0,0.5)";
+  ctx.shadowBlur = 4;
+  ctx.fillText(ft.text, ft.x, ft.y);
+  ctx.restore();
+}
+
+function addRipple(ripples: Ripple[], x: number, y: number) {
+  ripples.push({ x, y, r: 4, alpha: 0.7 });
+}
+
+function burst(particles: Particle[], x: number, y: number, color: string, n = 8) {
+  for (let i = 0; i < n; i++) {
+    const a = (Math.PI * 2 * i) / n + randBetween(-0.3, 0.3);
+    const spd = randBetween(40, 120);
+    particles.push({ x, y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, r: randBetween(2, 5), alpha: 1, color });
+  }
+}
+
+// ─── main component ──────────────────────────────────────────────────────────
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Game state refs (mutated in loop, no re-render)
+  // ── game state (all in refs to avoid re-renders in the loop) ────────────
   const islandsRef = useRef<Island[]>([]);
-  const frogRef = useRef<Frog | null>(null);
-  const rippleRef = useRef<Ripple[]>([]);
-  const particleRef = useRef<Particle[]>([]);
-  const flyRef = useRef<Fly[]>([]);
-  const currentIslandRef = useRef(0);
-  const sinkTimerRef = useRef(0);
+  const frogsRef = useRef<Frog[]>([]);          // [0] = player, rest = rivals
+  const birdsRef = useRef<Bird[]>([]);
+  const fishRef = useRef<Fish[]>([]);
+  const ripplesRef = useRef<Ripple[]>([]);
+  const particlesRef = useRef<Particle[]>([]);
+  const floatTextsRef = useRef<FloatText[]>([]);
   const timeRef = useRef(0);
-  const aimRef = useRef<{ x: number; y: number } | null>(null);
-  const phaseRef = useRef<"idle" | "aiming" | "jumping" | "dead" | "won">("idle");
+  const birdSpawnTimerRef = useRef(3.5);
   const scoreRef = useRef(0);
-  const isDraggingRef = useRef(false);
+  const phaseRef = useRef<"idle" | "jumping" | "dead" | "won">("idle");
+  const deathCauseRef = useRef<DeathCause>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // React state for UI
+  // ── react state (UI only) ────────────────────────────────────────────────
   const [score, setScore] = useState(0);
-  const [phase, setPhase] = useState<"idle" | "aiming" | "jumping" | "dead" | "won">("idle");
+  const [phase, setPhase] = useState<"idle" | "jumping" | "dead" | "won">("idle");
+  const [deathCause, setDeathCause] = useState<DeathCause>(null);
   const [highScore, updateHighScore] = useHighScore("frofrogjumping_hs");
-  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
 
-  // ── audio ──────────────────────────────────────────────────────────────
-  function ensureAudio() {
-    if (!audioCtxRef.current) {
-      audioCtxRef.current = new AudioContext();
-    }
+  // ── audio ────────────────────────────────────────────────────────────────
+  function getAudio() {
+    if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
     return audioCtxRef.current;
   }
-
-  function playPlop(pitched = false) {
+  function playBloop(freq = 320, dur = 0.18) {
     try {
-      const ctx = ensureAudio();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
+      const ac = getAudio();
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.connect(gain); gain.connect(ac.destination);
       osc.type = "sine";
-      osc.frequency.setValueAtTime(pitched ? 520 : 280, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(pitched ? 800 : 140, ctx.currentTime + 0.12);
-      gain.gain.setValueAtTime(0.18, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.2);
+      osc.frequency.setValueAtTime(freq, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.5, ac.currentTime + dur);
+      gain.gain.setValueAtTime(0.16, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+      osc.start(); osc.stop(ac.currentTime + dur + 0.02);
     } catch { /* muted */ }
   }
-
   function playSplash() {
     try {
-      const ctx = ensureAudio();
-      const buf = ctx.createBuffer(1, ctx.sampleRate * 0.25, ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < data.length; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.06));
-      }
-      const src = ctx.createBufferSource();
-      const gain = ctx.createGain();
-      src.buffer = buf;
-      src.connect(gain);
-      gain.connect(ctx.destination);
-      gain.gain.setValueAtTime(0.22, ctx.currentTime);
-      src.start(ctx.currentTime);
+      const ac = getAudio();
+      const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * 0.22), ac.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ac.sampleRate * 0.055));
+      const src = ac.createBufferSource();
+      const gain = ac.createGain();
+      src.buffer = buf; src.connect(gain); gain.connect(ac.destination);
+      gain.gain.setValueAtTime(0.2, ac.currentTime);
+      src.start();
+    } catch { /* muted */ }
+  }
+  function playScreech() {
+    try {
+      const ac = getAudio();
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.connect(gain); gain.connect(ac.destination);
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(900, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(400, ac.currentTime + 0.3);
+      gain.gain.setValueAtTime(0.12, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.3);
+      osc.start(); osc.stop(ac.currentTime + 0.32);
     } catch { /* muted */ }
   }
 
-  // ── init / resize ──────────────────────────────────────────────────────
+  // ── init ─────────────────────────────────────────────────────────────────
   const initGame = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const W = canvas.width;
-    const H = canvas.height;
+    const W = canvas.width, H = canvas.height;
 
-    const islandCount = Math.min(14, Math.max(8, Math.floor((W * H) / 28000)));
-    const startX = W * 0.15;
-    const startY = H * 0.5 + randBetween(-H * 0.15, H * 0.15);
+    const count = Math.min(16, Math.max(9, Math.floor((W * H) / 24000)));
+    const startX = clamp(W * 0.12, 80, 180);
+    const startY = H * 0.5 + randBetween(-H * 0.12, H * 0.12);
 
-    const islands = generateIslands(W, H, islandCount, startX, startY);
+    const islands = generateIslands(W, H, count, startX, startY);
     islandsRef.current = islands;
-    currentIslandRef.current = 0;
-    sinkTimerRef.current = 0;
-    scoreRef.current = 0;
-    rippleRef.current = [];
-    particleRef.current = [];
-    timeRef.current = 0;
-    phaseRef.current = "idle";
-    setScore(0);
-    setPhase("idle");
 
-    const start = islands[0];
-    if (start) {
-      frogRef.current = makeFrog(start.x, start.y);
-    }
+    // Player frog on start island
+    const start = islands[0]!;
+    const player = makePlayerFrog(start.x, start.y, 0);
+    const frogs: Frog[] = [player];
 
-    // Spawn flies on random islands (not start or last)
-    flyRef.current = [];
+    // Rival frogs — one per random mid island (not first, not last)
     for (let i = 1; i < islands.length - 1; i++) {
-      if (Math.random() < 0.45) {
+      if (Math.random() < 0.55) {
         const isl = islands[i]!;
-        flyRef.current.push({
-          x: isl.x + randBetween(-isl.r * 0.4, isl.r * 0.4),
-          y: isl.y - isl.r * 0.6,
-          islandIdx: i,
-          wingT: Math.random() * 10,
-        });
+        frogs.push(makeRivalFrog(isl.x, isl.y, i));
       }
     }
+    frogsRef.current = frogs;
+
+    birdsRef.current = [];
+    fishRef.current = [];
+    ripplesRef.current = [];
+    particlesRef.current = [];
+    floatTextsRef.current = [];
+    timeRef.current = 0;
+    birdSpawnTimerRef.current = 4;
+    scoreRef.current = 0;
+    phaseRef.current = "idle";
+    deathCauseRef.current = null;
+    setScore(0);
+    setPhase("idle");
+    setDeathCause(null);
   }, []);
 
   useEffect(() => {
     const obs = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const { width, height } = entry.contentRect;
+      const e = entries[0];
+      if (!e) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
-      canvas.width = Math.round(width);
-      canvas.height = Math.round(height);
-      setCanvasSize({ w: Math.round(width), h: Math.round(height) });
+      canvas.width = Math.round(e.contentRect.width);
+      canvas.height = Math.round(e.contentRect.height);
       initGame();
     });
     if (containerRef.current) obs.observe(containerRef.current);
     return () => obs.disconnect();
   }, [initGame]);
 
-  // ── pointer helpers ────────────────────────────────────────────────────
-  function getPointerPos(e: React.PointerEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left) * (canvas.width / rect.width),
-      y: (e.clientY - rect.top) * (canvas.height / rect.height),
-    };
-  }
-
-  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+  // ── tap handler ───────────────────────────────────────────────────────────
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     if (phaseRef.current === "dead" || phaseRef.current === "won") return;
-    isDraggingRef.current = true;
-    const pos = getPointerPos(e);
-    aimRef.current = pos;
-    phaseRef.current = "aiming";
-    setPhase("aiming");
-  }
+    if (phaseRef.current === "jumping") return;
 
-  function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!isDraggingRef.current) return;
-    const pos = getPointerPos(e);
-    aimRef.current = pos;
-  }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const tapX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const tapY = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-  function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!isDraggingRef.current) return;
-    isDraggingRef.current = false;
-
-    if (phaseRef.current !== "aiming") return;
-
-    const frog = frogRef.current;
-    const aim = aimRef.current;
-    if (!frog || !aim) return;
-
-    // Jump toward aim point (inverted — frog launches away from drag)
-    const dx = frog.x - aim.x;
-    const dy = frog.y - aim.y;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d < 15) { phaseRef.current = "idle"; setPhase("idle"); return; }
-
-    const maxDist = 300;
-    if (d > maxDist + 40) { phaseRef.current = "idle"; setPhase("idle"); return; }
-
-    // Find nearest island in that direction
-    const nx = frog.x + (dx / d) * Math.min(d, maxDist);
-    const ny = frog.y + (dy / d) * Math.min(d, maxDist);
+    const frogs = frogsRef.current;
+    const player = frogs[0];
+    if (!player || !player.alive) return;
 
     const islands = islandsRef.current;
-    let bestIsl = -1, bestDist = 9999;
+
+    // Find tapped island
+    let tappedIdx = -1;
+    let bestD = 9999;
     for (let i = 0; i < islands.length; i++) {
-      if (i === currentIslandRef.current) continue;
+      if (i === player.islandIdx) continue;
       const isl = islands[i]!;
-      if (isl.sinking && isl.sinkT > 0.5) continue;
-      const dd = dist(nx, ny, isl.x, isl.y);
-      if (dd < isl.r + 20 && dd < bestDist) { bestDist = dd; bestIsl = i; }
+      const d = dist(tapX, tapY, isl.x, isl.y + isl.wobble);
+      // generous tap radius
+      if (d < isl.r + 28 && d < bestD) { bestD = d; tappedIdx = i; }
     }
+    if (tappedIdx === -1) return;
 
-    if (bestIsl === -1) {
-      // Missed — fall into water
-      frog.fromX = frog.x; frog.fromY = frog.y;
-      frog.toX = nx; frog.toY = ny;
-      frog.jumpT = 0;
-      frog.jumpDuration = 0.55;
-      frog.angle = Math.atan2(dy, dx);
-      phaseRef.current = "jumping";
-      setPhase("jumping");
-      // Will detect miss in loop
-      (frog as Frog & { missJump: boolean }).missJump = true;
-      return;
-    }
+    const targetIsl = islands[tappedIdx]!;
+    // Too far?
+    const jumpDist = dist(player.x, player.y, targetIsl.x, targetIsl.y);
+    if (jumpDist > 340) return;
 
-    const target = islands[bestIsl]!;
-    frog.fromX = frog.x; frog.fromY = frog.y;
-    frog.toX = target.x; frog.toY = target.y;
-    frog.jumpT = 0;
-    frog.angle = Math.atan2(dy, dx);
-    const jumpDist = dist(frog.fromX, frog.fromY, frog.toX, frog.toY);
-    frog.jumpDuration = clamp(jumpDist / 420, 0.3, 0.75);
-    frog.squishX = 0.7; frog.squishY = 1.4;
+    // Launch player
+    player.fromX = player.x; player.fromY = player.y;
+    player.toX = targetIsl.x; player.toY = targetIsl.y;
+    player.jumpT = 0;
+    player.jumpDuration = clamp(jumpDist / 420, 0.28, 0.7);
+    player.angle = Math.atan2(targetIsl.y - player.y, targetIsl.x - player.x);
+    player.squishX = 0.7; player.squishY = 1.4;
+    player.islandIdx = -1;
+
+    // Store target for landing resolution
+    (player as Frog & { _target: number })._target = tappedIdx;
+
     phaseRef.current = "jumping";
     setPhase("jumping");
-    (frog as Frog & { missJump: boolean }).missJump = false;
-    (frog as Frog & { targetIsland: number }).targetIsland = bestIsl;
+    playBloop(300, 0.15);
+    addRipple(ripplesRef.current, player.x, player.y);
+  }, []);
 
-    playPlop(false);
-    addRipple(rippleRef.current, frog.x, frog.y);
-  }
-
-  // ── game loop ──────────────────────────────────────────────────────────
+  // ── game loop ─────────────────────────────────────────────────────────────
   const paused = phase === "dead" || phase === "won";
 
   useGameLoop(useCallback((dt: number) => {
@@ -614,164 +609,246 @@ export default function App() {
     const t = timeRef.current;
 
     const islands = islandsRef.current;
-    const frog = frogRef.current;
-    const ripples = rippleRef.current;
-    const particles = particleRef.current;
-    const flies = flyRef.current;
+    const frogs = frogsRef.current;
+    const birds = birdsRef.current;
+    const fishes = fishRef.current;
+    const ripples = ripplesRef.current;
+    const particles = particlesRef.current;
+    const floats = floatTextsRef.current;
+    const player = frogs[0];
 
-    // ── update islands ───────────────────────────────────────────────────
+    // ── island wobble & sinking ────────────────────────────────────────────
     for (const isl of islands) {
-      isl.wobble += isl.wobbleDir * dt * 6;
+      isl.wobble += isl.wobbleDir * dt * 5.5;
       if (Math.abs(isl.wobble) > 2.5) isl.wobbleDir *= -1;
-
       if (isl.sinking) {
         isl.sinkT = Math.min(isl.sinkT + dt / SINK_TIME, 1);
-        if (isl.sinkT >= 0.98) {
-          isl.y += dt * 40; // sink below surface
-        }
+        if (isl.sinkT > 0.95) isl.y += dt * 35;
       }
     }
 
-    // ── update frog ──────────────────────────────────────────────────────
-    if (frog && phaseRef.current === "jumping") {
-      frog.jumpT = Math.min(frog.jumpT + dt / frog.jumpDuration, 1);
-      const t01 = frog.jumpT;
+    // ── player jump arc ────────────────────────────────────────────────────
+    if (player && player.alive && phaseRef.current === "jumping") {
+      player.jumpT = Math.min(player.jumpT + dt / player.jumpDuration, 1);
+      const jt = player.jumpT;
+      const jd = dist(player.fromX, player.fromY, player.toX, player.toY);
+      player.x = player.fromX + (player.toX - player.fromX) * jt;
+      player.y = arcY(player.fromY, player.toY, jd, jt);
 
-      const jumpDist = dist(frog.fromX, frog.fromY, frog.toX, frog.toY);
-      frog.x = lerp(frog.fromX, frog.toX, t01);
-      frog.y = arcY(frog.fromY, frog.toY, jumpDist, t01);
-
-      // Squash & stretch
-      if (t01 < 0.5) {
-        frog.squishX = lerp(0.7, 1.3, t01 * 2);
-        frog.squishY = lerp(1.4, 0.7, t01 * 2);
+      // squash & stretch
+      if (jt < 0.5) {
+        player.squishX = lerp(0.7, 1.3, jt * 2);
+        player.squishY = lerp(1.4, 0.7, jt * 2);
       } else {
-        frog.squishX = lerp(1.3, 1.0, (t01 - 0.5) * 2);
-        frog.squishY = lerp(0.7, 1.0, (t01 - 0.5) * 2);
+        player.squishX = lerp(1.3, 1.0, (jt - 0.5) * 2);
+        player.squishY = lerp(0.7, 1.0, (jt - 0.5) * 2);
       }
 
-      if (frog.jumpT >= 1) {
-        const isMiss = (frog as Frog & { missJump?: boolean }).missJump;
-
-        if (isMiss) {
-          // Fell in water
-          playSplash();
-          burstParticles(particles, frog.x, frog.y, "rgb(126,205,194)", 12);
-          addRipple(ripples, frog.x, frog.y);
-          addRipple(ripples, frog.x + 8, frog.y + 5);
-          phaseRef.current = "dead";
-          setPhase("dead");
-          updateHighScore(scoreRef.current);
+      if (player.jumpT >= 1) {
+        // Landing
+        const targetIdx = (player as Frog & { _target?: number })._target ?? -1;
+        if (targetIdx === -1) {
+          killPlayer("water");
         } else {
-          // Landed on island
-          const targetIdx = (frog as Frog & { targetIsland?: number }).targetIsland ?? 0;
-          const prevIdx = currentIslandRef.current;
-          const prevIsl = islands[prevIdx];
+          const targetIsl = islands[targetIdx];
+          if (!targetIsl || (targetIsl.sinking && targetIsl.sinkT > 0.7)) {
+            killPlayer("water");
+          } else {
+            // Check rival frog collision
+            let rivalHit = false;
+            for (let fi = 1; fi < frogs.length; fi++) {
+              const rival = frogs[fi]!;
+              if (rival.islandIdx === targetIdx && rival.alive) {
+                rivalHit = true;
+                // Both fall in — fish eats them
+                rival.alive = false;
+                rival.islandIdx = -1;
+                // Spawn fish at that spot
+                spawnFishAt(targetIsl.x, targetIsl.y + targetIsl.wobble);
+                burst(particles, targetIsl.x, targetIsl.y, "#1565c0", 14);
+                addRipple(ripples, targetIsl.x, targetIsl.y);
+                addRipple(ripples, targetIsl.x + 10, targetIsl.y - 5);
+                playSplash();
+                floats.push({ x: targetIsl.x, y: targetIsl.y - 30, vy: -55, alpha: 1, text: "🐟 GULP!", color: "#e3f2fd" });
+                killPlayer("fish");
+                break;
+              }
+            }
 
-          // Start sinking previous island
-          if (prevIsl && !prevIsl.sinking && prevIdx !== 0) {
-            prevIsl.sinking = true;
-            prevIsl.sinkT = 0;
-          }
+            if (!rivalHit) {
+              // Successful landing
+              player.islandIdx = targetIdx;
+              player.x = targetIsl.x;
+              player.y = targetIsl.y;
+              player.squishX = 1.3; player.squishY = 0.7;
+              player.angle = 0;
 
-          currentIslandRef.current = targetIdx;
-          sinkTimerRef.current = 0;
+              const newScore = scoreRef.current + 1;
+              scoreRef.current = newScore;
+              setScore(newScore);
+              addRipple(ripples, player.x, player.y);
+              burst(particles, player.x, player.y, "#4caf50", 5);
+              playBloop(520, 0.12);
 
-          const newIsl = islands[targetIdx];
-          if (newIsl) {
-            frog.x = newIsl.x;
-            frog.y = newIsl.y;
-          }
-          frog.squishX = 1.3;
-          frog.squishY = 0.7;
-          frog.jumpT = 1;
+              // Float score
+              floats.push({ x: player.x, y: player.y - 30, vy: -50, alpha: 1, text: `+1`, color: "#ffd54f" });
 
-          // Score
-          const newScore = scoreRef.current + 1;
-          scoreRef.current = newScore;
-          setScore(newScore);
-
-          // Eat fly?
-          for (let fi = flies.length - 1; fi >= 0; fi--) {
-            const fly = flies[fi]!;
-            if (fly.islandIdx === targetIdx) {
-              flies.splice(fi, 1);
-              frog.tongueOut = true;
-              frog.tongueT = 0;
-              playPlop(true);
+              // Win?
+              if (targetIdx === islands.length - 1) {
+                phaseRef.current = "won";
+                setPhase("won");
+                updateHighScore(newScore);
+                burst(particles, player.x, player.y, "#ffd54f", 22);
+                burst(particles, player.x, player.y, "#f48fb1", 14);
+              } else {
+                phaseRef.current = "idle";
+                setPhase("idle");
+              }
             }
           }
-
-          playPlop(false);
-          addRipple(ripples, frog.x, frog.y);
-          burstParticles(particles, frog.x, frog.y + 10, "rgb(76,175,80)", 6);
-
-          // Check win — reached last island
-          if (targetIdx === islands.length - 1) {
-            phaseRef.current = "won";
-            setPhase("won");
-            updateHighScore(newScore);
-            burstParticles(particles, frog.x, frog.y, "rgb(255,213,79)", 20);
-          } else {
-            phaseRef.current = "idle";
-            setPhase("idle");
-          }
         }
       }
     }
 
-    // Squish recovery
-    if (frog && phaseRef.current === "idle") {
-      frog.squishX = lerp(frog.squishX, 1, dt * 8);
-      frog.squishY = lerp(frog.squishY, 1, dt * 8);
+    // squish recovery when idle
+    if (player && player.alive && phaseRef.current === "idle") {
+      player.squishX = lerp(player.squishX, 1, dt * 9);
+      player.squishY = lerp(player.squishY, 1, dt * 9);
     }
 
-    // Tongue animation
-    if (frog && frog.tongueOut) {
-      frog.tongueT = Math.min(frog.tongueT + dt * 4, 1);
-      if (frog.tongueT >= 1) frog.tongueOut = false;
+    // ── bird spawning ──────────────────────────────────────────────────────
+    birdSpawnTimerRef.current -= dt;
+    if (birdSpawnTimerRef.current <= 0) {
+      birdSpawnTimerRef.current = randBetween(5, 9);
+      birds.push(makeBird(W, H));
     }
 
-    // ── update ripples ───────────────────────────────────────────────────
+    // ── bird AI ────────────────────────────────────────────────────────────
+    for (let bi = birds.length - 1; bi >= 0; bi--) {
+      const bird = birds[bi]!;
+      bird.wingT += dt;
+
+      if (bird.phase === "soaring") {
+        bird.x += bird.vx * dt;
+        bird.y += bird.vy * dt;
+
+        // Decide to dive at player?
+        if (player && player.alive && phaseRef.current !== "dead" && phaseRef.current !== "won") {
+          const d = dist(bird.x, bird.y, player.x, player.y);
+          if (d < 200 && Math.abs(bird.x - player.x) < 160) {
+            bird.phase = "diving";
+            bird.strikeX = player.x;
+            bird.strikeY = player.y;
+            bird.diveT = 0;
+          }
+        }
+
+        // Leave screen
+        if (bird.x < -100 || bird.x > W + 100) birds.splice(bi, 1);
+
+      } else if (bird.phase === "diving") {
+        bird.diveT = Math.min(bird.diveT + dt * 1.6, 1);
+        const startX = bird.x - bird.vx * (bird.diveT / 1.6);
+        const startY = bird.y;
+        bird.x = lerp(startX, bird.strikeX, bird.diveT);
+        bird.y = lerp(startY, bird.strikeY - 10, bird.diveT);
+
+        // Hit player?
+        if (player && player.alive) {
+          const d = dist(bird.x, bird.y, player.x, player.y);
+          if (d < 28) {
+            playScreech();
+            burst(particles, player.x, player.y, "#ff8f00", 10);
+            floats.push({ x: player.x, y: player.y - 30, vy: -55, alpha: 1, text: "🦅 SNATCHED!", color: "#ff8f00" });
+            killPlayer("bird");
+            bird.phase = "leaving";
+            bird.vx = bird.vx > 0 ? 120 : -120;
+            bird.vy = -60;
+          }
+        }
+
+        if (bird.diveT >= 1) {
+          bird.phase = "rising";
+          bird.vy = -90;
+        }
+
+      } else if (bird.phase === "rising") {
+        bird.x += bird.vx * dt;
+        bird.y += bird.vy * dt;
+        bird.vy = lerp(bird.vy, 0, dt * 3);
+        if (bird.y < 60) { bird.phase = "leaving"; }
+
+      } else if (bird.phase === "leaving") {
+        bird.x += bird.vx * dt;
+        bird.y += bird.vy * dt;
+        bird.vy = lerp(bird.vy, 0, dt * 2);
+        if (bird.x < -120 || bird.x > W + 120) birds.splice(bi, 1);
+      }
+    }
+
+    // ── fish update ────────────────────────────────────────────────────────
+    for (let fi = fishes.length - 1; fi >= 0; fi--) {
+      const fish = fishes[fi]!;
+      fish.t += dt;
+
+      if (fish.phase === "rising") {
+        const progress = Math.min(fish.t / 0.55, 1);
+        fish.y = fish.targetY + 80 - 80 * progress;
+        fish.mouthOpen = progress;
+        if (progress >= 1) { fish.phase = "snapping"; fish.t = 0; }
+
+      } else if (fish.phase === "snapping") {
+        fish.mouthOpen = 1 - fish.t * 2;
+        if (fish.t > 0.5) { fish.phase = "sinking"; fish.t = 0; }
+
+      } else if (fish.phase === "sinking") {
+        fish.y += dt * 60;
+        fish.mouthOpen = 0;
+        if (fish.t > 1.2) fishes.splice(fi, 1);
+      }
+    }
+
+    // ── ripples ────────────────────────────────────────────────────────────
     for (let i = ripples.length - 1; i >= 0; i--) {
       const rip = ripples[i]!;
-      rip.r += dt * 38;
-      rip.alpha -= dt * 1.4;
+      rip.r += dt * 36; rip.alpha -= dt * 1.3;
       if (rip.alpha <= 0) ripples.splice(i, 1);
     }
 
-    // ── update particles ─────────────────────────────────────────────────
+    // ── particles ──────────────────────────────────────────────────────────
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i]!;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vy += 180 * dt; // gravity
-      p.alpha -= dt * 2.2;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vy += 200 * dt;
+      p.alpha -= dt * 2;
       if (p.alpha <= 0) particles.splice(i, 1);
     }
 
-    // ── update flies ─────────────────────────────────────────────────────
-    for (const fly of flies) {
-      fly.wingT += dt;
-      const isl = islands[fly.islandIdx];
-      if (isl) {
-        fly.x = isl.x + Math.sin(t * 1.2 + fly.wingT) * isl.r * 0.3;
-      }
+    // ── float texts ────────────────────────────────────────────────────────
+    for (let i = floats.length - 1; i >= 0; i--) {
+      const ft = floats[i]!;
+      ft.y += ft.vy * dt;
+      ft.vy = lerp(ft.vy, 0, dt * 4);
+      ft.alpha -= dt * 1.1;
+      if (ft.alpha <= 0) floats.splice(i, 1);
     }
 
-    // ── DRAW ─────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    // DRAW
+    // ═══════════════════════════════════════════════════════════════════════
     ctx.clearRect(0, 0, W, H);
     drawWater(ctx, W, H, t);
 
     // Ripples
     for (const rip of ripples) drawRipple(ctx, rip);
 
-    // Islands (back to front, sorted by y)
-    const sortedIslands = [...islands].map((isl, i) => ({ isl, i }))
+    // Islands + frogs on them (back-to-front by y)
+    const sorted = islands
+      .map((isl, i) => ({ isl, i }))
       .sort((a, b) => a.isl.y - b.isl.y);
 
-    for (const { isl, i } of sortedIslands) {
-      const alpha = isl.sinking ? clamp(1 - isl.sinkT * 1.4, 0, 1) : 1;
+    for (const { isl, i } of sorted) {
+      const alpha = isl.sinking ? clamp(1 - isl.sinkT * 1.5, 0, 1) : 1;
       if (alpha <= 0) continue;
       drawIsland(ctx, isl, alpha);
 
@@ -780,142 +857,149 @@ export default function App() {
         drawGoalFlower(ctx, isl, t);
       }
 
-      // Highlight current island
-      if (i === currentIslandRef.current && phaseRef.current === "idle") {
+      // Glow on player's current island
+      if (player && i === player.islandIdx && phaseRef.current === "idle") {
         ctx.save();
-        ctx.globalAlpha = 0.25 + Math.sin(t * 3) * 0.1;
-        drawGlow(ctx, isl.x, isl.y + isl.wobble, isl.r + 18, "#a5d6a7");
+        ctx.globalAlpha = 0.22 + Math.sin(t * 3) * 0.08;
+        drawGlow(ctx, isl.x, isl.y + isl.wobble, isl.r + 20, "#a5d6a7");
         ctx.globalAlpha = 1;
         ctx.restore();
       }
+
+      // Rival frogs sitting on islands
+      for (let fi = 1; fi < frogs.length; fi++) {
+        const rival = frogs[fi]!;
+        if (rival.alive && rival.islandIdx === i) {
+          drawFrog(ctx, rival, t, isl.wobble, 1);
+        }
+      }
     }
 
-    // Flies
-    for (const fly of flies) drawFly(ctx, fly, islands);
+    // Fish
+    for (const fish of fishes) drawFish(ctx, fish);
 
     // Particles
     for (const p of particles) drawParticle(ctx, p);
 
-    // Frog
-    if (frog) drawFrog(ctx, frog, t);
-
-    // Aim line
-    if (phaseRef.current === "aiming" && aimRef.current && frog) {
-      const aim = aimRef.current;
-      const dx = frog.x - aim.x;
-      const dy = frog.y - aim.y;
-      const d = Math.sqrt(dx * dx + dy * dy);
-      const canReach = d <= 300;
-      drawAimArrow(ctx, frog.x, frog.y, frog.x + dx, frog.y + dy, canReach);
+    // Player frog
+    if (player && player.alive) {
+      const onIsl = player.islandIdx >= 0 ? (islands[player.islandIdx] ?? null) : null;
+      const wobOff = onIsl ? onIsl.wobble : 0;
+      drawFrog(ctx, player, t, wobOff, 1);
     }
 
-    // Island number labels (debug off)
-    // for (let i=0;i<islands.length;i++) { drawText(ctx, String(i), islands[i].x, islands[i].y, {color:'#fff',font:'12px Manrope'}); }
+    // Birds (on top)
+    for (const bird of birds) drawBird(ctx, bird);
+
+    // Float texts
+    for (const ft of floats) drawFloatText(ctx, ft);
+
+    // ── tap-target highlights ──────────────────────────────────────────────
+    if (phaseRef.current === "idle" && player) {
+      for (let i = 0; i < islands.length; i++) {
+        if (i === player.islandIdx) continue;
+        const isl = islands[i]!;
+        const d = dist(player.x, player.y, isl.x, isl.y);
+        if (d <= 340) {
+          ctx.save();
+          ctx.globalAlpha = 0.18 + Math.sin(t * 2.5 + i) * 0.06;
+          ctx.beginPath();
+          ctx.arc(isl.x, isl.y + isl.wobble, isl.r + 8, 0, Math.PI * 2);
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
+      }
+    }
 
   }, [updateHighScore]), paused);
 
-  // ── restart ────────────────────────────────────────────────────────────
-  function restart() {
-    initGame();
+  // ── helpers called from loop ───────────────────────────────────────────────
+  function killPlayer(cause: DeathCause) {
+    const player = frogsRef.current[0];
+    if (!player) return;
+    player.alive = false;
+    player.islandIdx = -1;
+    phaseRef.current = "dead";
+    deathCauseRef.current = cause;
+    setPhase("dead");
+    setDeathCause(cause);
+    updateHighScore(scoreRef.current);
+    if (cause === "water" || cause === "fish") playSplash();
+    burst(particlesRef.current, player.x, player.y, cause === "bird" ? "#ff8f00" : "#7ecdc2", 12);
+    addRipple(ripplesRef.current, player.x, player.y);
   }
 
-  const lastIsland = islandsRef.current[islandsRef.current.length - 1];
+  function spawnFishAt(x: number, y: number) {
+    const fish = makeFish(x, y);
+    fish.phase = "rising";
+    fish.t = 0;
+    fishRef.current.push(fish);
+  }
+
+  // ── UI ────────────────────────────────────────────────────────────────────
+  const deathMessages: Record<NonNullable<DeathCause>, { emoji: string; title: string; sub: string }> = {
+    bird:  { emoji: "🦅", title: "Snatched!", sub: "A heron grabbed you!" },
+    fish:  { emoji: "🐟", title: "Gulp!", sub: "You crashed into a rival — fish ate you both!" },
+    water: { emoji: "💦", title: "Splashed!", sub: "You missed the lily pad!" },
+  };
+  const dm = deathCause ? deathMessages[deathCause] : null;
   const totalIslands = Math.max(0, islandsRef.current.length - 1);
 
   return (
     <GameShell topbar={
-      <GameTopbar
-        title="Frog Marsh"
-        score={score}
-        highScore={highScore}
-      />
+      <GameTopbar title="Frog Marsh" score={score} highScore={highScore} />
     }>
       <div ref={containerRef} className="relative w-full h-full overflow-hidden select-none">
-        {/* Canvas */}
         <canvas
           ref={canvasRef}
           className="absolute inset-0 w-full h-full touch-none"
-          style={{ cursor: phase === "idle" ? "crosshair" : "default" }}
+          style={{ cursor: "pointer" }}
           onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerLeave={onPointerUp}
         />
 
-        {/* HUD — progress */}
-        {(phase === "idle" || phase === "aiming" || phase === "jumping") && canvasSize.w > 0 && (
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-none">
-            <div
-              className="rounded-full px-3 py-1 text-sm font-semibold"
-              style={{
-                background: "rgba(0,0,0,0.35)",
-                color: "#e8f5e9",
-                fontFamily: "Manrope, sans-serif",
-                backdropFilter: "blur(4px)",
-              }}
-            >
+        {/* Progress HUD */}
+        {(phase === "idle" || phase === "jumping") && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none">
+            <div className="rounded-full px-3 py-1 text-sm font-semibold"
+              style={{ background: "rgba(0,0,0,0.38)", color: "#e8f5e9", fontFamily: "Manrope, sans-serif", backdropFilter: "blur(4px)" }}>
               🐸 {score} / {totalIslands}
             </div>
           </div>
         )}
 
-        {/* Instruction overlay */}
-        {phase === "idle" && score === 0 && canvasSize.w > 0 && (
-          <div
-            className="absolute bottom-8 left-1/2 -translate-x-1/2 rounded-2xl px-5 py-3 text-center pointer-events-none"
-            style={{
-              background: "rgba(0,0,0,0.4)",
-              backdropFilter: "blur(6px)",
-              color: "#e8f5e9",
-              fontFamily: "Manrope, sans-serif",
-              maxWidth: "260px",
-            }}
-          >
-            <p className="text-base font-semibold">Drag &amp; release to jump!</p>
+        {/* Tutorial */}
+        {phase === "idle" && score === 0 && (
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 rounded-2xl px-5 py-3 text-center pointer-events-none"
+            style={{ background: "rgba(0,0,0,0.42)", backdropFilter: "blur(6px)", color: "#e8f5e9", fontFamily: "Manrope, sans-serif", maxWidth: "280px" }}>
+            <p className="text-base font-semibold">Tap a lily pad to jump! 🐸</p>
             <p className="text-xs mt-1" style={{ color: "#a5d6a7" }}>
-              Reach the flower 🌸 — don't fall in!
+              Reach the flower 🌸 — avoid birds 🦅 and rival frogs!
+            </p>
+            <p className="text-xs mt-0.5" style={{ color: "#ef9a9a" }}>
+              Land on another frog and you both get eaten by a fish 🐟
             </p>
           </div>
         )}
 
-        {/* Dead overlay */}
-        {phase === "dead" && (
+        {/* Death overlay */}
+        {phase === "dead" && dm && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div
-              className="rounded-3xl px-8 py-8 text-center flex flex-col items-center gap-4"
-              style={{
-                background: "rgba(10,30,25,0.82)",
-                backdropFilter: "blur(10px)",
-                color: "#e8f5e9",
-                fontFamily: "Manrope, sans-serif",
-                minWidth: "240px",
-              }}
-            >
-              <div style={{ fontSize: "3rem" }}>💦</div>
-              <h2 style={{ fontFamily: "Fraunces, serif", fontSize: "1.8rem", fontWeight: 700 }}>
-                Splashed!
-              </h2>
-              <p style={{ color: "#80cbc4" }}>
-                You hopped <strong style={{ color: "#fff" }}>{score}</strong> island{score !== 1 ? "s" : ""}
-              </p>
+            <div className="rounded-3xl px-8 py-8 text-center flex flex-col items-center gap-4"
+              style={{ background: "rgba(8,28,22,0.88)", backdropFilter: "blur(12px)", color: "#e8f5e9", fontFamily: "Manrope, sans-serif", minWidth: "260px" }}>
+              <div style={{ fontSize: "3rem" }}>{dm.emoji}</div>
+              <h2 style={{ fontFamily: "Fraunces, serif", fontSize: "1.9rem", fontWeight: 700 }}>{dm.title}</h2>
+              <p style={{ color: "#80cbc4", fontSize: "0.92rem" }}>{dm.sub}</p>
+              <p style={{ color: "#ccc" }}>You crossed <strong style={{ color: "#fff" }}>{score}</strong> island{score !== 1 ? "s" : ""}</p>
               {highScore > 0 && (
-                <p style={{ color: "#ffd54f", fontSize: "0.85rem" }}>
-                  Best: {highScore} 🏆
-                </p>
+                <p style={{ color: "#ffd54f", fontSize: "0.85rem" }}>Best: {highScore} 🏆</p>
               )}
-              <button
-                onClick={restart}
-                className="mt-2 rounded-2xl px-8 py-3 font-bold text-base"
-                style={{
-                  background: "#4caf50",
-                  color: "#fff",
-                  fontFamily: "Manrope, sans-serif",
-                  border: "none",
-                  cursor: "pointer",
-                  minWidth: "44px",
-                  minHeight: "44px",
-                }}
-              >
+              <button onClick={initGame}
+                className="mt-1 rounded-2xl px-8 py-3 font-bold text-base"
+                style={{ background: "#4caf50", color: "#fff", fontFamily: "Manrope, sans-serif", border: "none", cursor: "pointer", minHeight: "48px" }}>
                 Try Again 🐸
               </button>
             </div>
@@ -925,41 +1009,17 @@ export default function App() {
         {/* Win overlay */}
         {phase === "won" && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div
-              className="rounded-3xl px-8 py-8 text-center flex flex-col items-center gap-4"
-              style={{
-                background: "rgba(10,30,25,0.85)",
-                backdropFilter: "blur(10px)",
-                color: "#e8f5e9",
-                fontFamily: "Manrope, sans-serif",
-                minWidth: "240px",
-              }}
-            >
+            <div className="rounded-3xl px-8 py-8 text-center flex flex-col items-center gap-4"
+              style={{ background: "rgba(8,28,22,0.88)", backdropFilter: "blur(12px)", color: "#e8f5e9", fontFamily: "Manrope, sans-serif", minWidth: "260px" }}>
               <div style={{ fontSize: "3rem" }}>🌸</div>
-              <h2 style={{ fontFamily: "Fraunces, serif", fontSize: "1.8rem", fontWeight: 700, color: "#ffd54f" }}>
-                You made it!
-              </h2>
-              <p style={{ color: "#80cbc4" }}>
-                Crossed <strong style={{ color: "#fff" }}>{totalIslands}</strong> islands!
-              </p>
+              <h2 style={{ fontFamily: "Fraunces, serif", fontSize: "1.9rem", fontWeight: 700, color: "#ffd54f" }}>You made it!</h2>
+              <p style={{ color: "#80cbc4" }}>Crossed all <strong style={{ color: "#fff" }}>{totalIslands}</strong> islands!</p>
               {highScore > 0 && (
-                <p style={{ color: "#ffd54f", fontSize: "0.85rem" }}>
-                  Best: {highScore} 🏆
-                </p>
+                <p style={{ color: "#ffd54f", fontSize: "0.85rem" }}>Best: {highScore} 🏆</p>
               )}
-              <button
-                onClick={restart}
-                className="mt-2 rounded-2xl px-8 py-3 font-bold text-base"
-                style={{
-                  background: "#ffd54f",
-                  color: "#1a1a1a",
-                  fontFamily: "Manrope, sans-serif",
-                  border: "none",
-                  cursor: "pointer",
-                  minWidth: "44px",
-                  minHeight: "44px",
-                }}
-              >
+              <button onClick={initGame}
+                className="mt-1 rounded-2xl px-8 py-3 font-bold text-base"
+                style={{ background: "#ffd54f", color: "#1a1a1a", fontFamily: "Manrope, sans-serif", border: "none", cursor: "pointer", minHeight: "48px" }}>
                 Play Again 🐸
               </button>
             </div>

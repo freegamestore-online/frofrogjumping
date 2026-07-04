@@ -1,13 +1,10 @@
-import type { Island, Frog, Ripple, Fly, Particle } from "../types";
+import type { Island, Frog, Bird, Fish } from "../types";
 
-// ── constants ──────────────────────────────────────────────────────────────
 export const ISLAND_TYPES = ["lily", "log", "rock"] as const;
-export const SINK_TIME = 2.2;      // seconds after landing before island sinks
-export const JUMP_SPEED = 520;     // px/s baseline
-export const MAX_JUMP_DIST = 320;  // px
-export const GRAVITY_PEAK = 0.55;  // arc peak height as fraction of distance
+export const SINK_TIME = 3.0;
+export const MAX_JUMP_DIST = 340;
+export const GRAVITY_PEAK = 0.52;
 
-// ── helpers ────────────────────────────────────────────────────────────────
 export function randBetween(a: number, b: number) {
   return a + Math.random() * (b - a);
 }
@@ -21,51 +18,53 @@ export function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
+export function arcY(fromY: number, toY: number, d: number, t: number): number {
+  const base = fromY + (toY - fromY) * t;
+  const peak = Math.min(d * GRAVITY_PEAK, 150);
+  return base - peak * Math.sin(Math.PI * t);
+}
+
 // ── island generation ──────────────────────────────────────────────────────
 export function generateIslands(
-  canvasW: number,
-  canvasH: number,
+  W: number,
+  H: number,
   count: number,
   startX: number,
   startY: number,
 ): Island[] {
   const islands: Island[] = [];
 
-  // First island is the start pad (always a lily)
   islands.push({
-    x: startX,
-    y: startY,
-    r: 46,
-    wobble: 0,
-    wobbleDir: 1,
-    sinking: false,
-    sinkT: 0,
+    x: startX, y: startY, r: 46,
+    wobble: 0, wobbleDir: 1,
+    sinking: false, sinkT: 0,
     type: "lily",
   });
 
-  const margin = 60;
+  const margin = 70;
   let attempts = 0;
 
-  while (islands.length < count && attempts < count * 40) {
+  while (islands.length < count && attempts < count * 60) {
     attempts++;
     const prev = islands[islands.length - 1]!;
-    const angle = randBetween(-Math.PI * 0.55, Math.PI * 0.55);
-    const d = randBetween(120, MAX_JUMP_DIST - 20);
+    const angle = randBetween(-Math.PI * 0.6, Math.PI * 0.6);
+    const d = randBetween(110, MAX_JUMP_DIST - 30);
     const nx = prev.x + Math.cos(angle) * d;
     const ny = prev.y + Math.sin(angle) * d;
 
-    if (nx < margin || nx > canvasW - margin || ny < margin || ny > canvasH - margin) continue;
+    if (nx < margin || nx > W - margin || ny < margin || ny > H - margin) continue;
 
-    // Ensure no overlap with existing islands
     let overlap = false;
     for (const isl of islands) {
-      if (dist(isl.x, isl.y, nx, ny) < isl.r + 38) { overlap = true; break; }
+      if (dist(isl.x, isl.y, nx, ny) < isl.r + 42) { overlap = true; break; }
     }
     if (overlap) continue;
 
     const typeIdx = Math.floor(Math.random() * 3);
     const type = ISLAND_TYPES[typeIdx] ?? "lily";
-    const r = type === "lily" ? randBetween(34, 50) : type === "log" ? randBetween(28, 38) : randBetween(26, 36);
+    const r = type === "lily" ? randBetween(34, 50)
+            : type === "log"  ? randBetween(28, 38)
+            :                   randBetween(26, 36);
 
     islands.push({
       x: nx, y: ny, r,
@@ -78,42 +77,59 @@ export function generateIslands(
   return islands;
 }
 
-// ── frog init ──────────────────────────────────────────────────────────────
-export function makeFrog(x: number, y: number): Frog {
+// ── frog factory ───────────────────────────────────────────────────────────
+const RIVAL_COLORS = [
+  { body: "#e57373", dark: "#c62828", belly: "#ffcdd2", eye: "#fff9c4" },
+  { body: "#ffb74d", dark: "#e65100", belly: "#ffe0b2", eye: "#f3e5f5" },
+  { body: "#ba68c8", dark: "#6a1b9a", belly: "#e1bee7", eye: "#fff9c4" },
+  { body: "#4dd0e1", dark: "#00838f", belly: "#b2ebf2", eye: "#fff9c4" },
+  { body: "#fff176", dark: "#f9a825", belly: "#fffde7", eye: "#e8f5e9" },
+];
+
+export function makePlayerFrog(x: number, y: number, islandIdx: number): Frog {
   return {
-    x, y, vx: 0, vy: 0, angle: 0,
+    x, y, fromX: x, fromY: y, toX: x, toY: y,
+    jumpT: 1, jumpDuration: 0.5, angle: 0,
     squishX: 1, squishY: 1,
-    jumpT: 1,
-    fromX: x, fromY: y, toX: x, toY: y,
-    jumpDuration: 0.5,
-    tongueOut: false, tongueT: 0,
+    islandIdx, alive: true, isPlayer: true,
+    color: "#56c56e", eyeColor: "#fffde7",
   };
 }
 
-// ── ripple helpers ─────────────────────────────────────────────────────────
-export function addRipple(ripples: Ripple[], x: number, y: number) {
-  ripples.push({ x, y, r: 4, alpha: 0.7 });
+export function makeRivalFrog(x: number, y: number, islandIdx: number): Frog {
+  const palette = RIVAL_COLORS[Math.floor(Math.random() * RIVAL_COLORS.length)]!;
+  return {
+    x, y, fromX: x, fromY: y, toX: x, toY: y,
+    jumpT: 1, jumpDuration: 0.5, angle: 0,
+    squishX: 1, squishY: 1,
+    islandIdx, alive: true, isPlayer: false,
+    color: palette.body, eyeColor: palette.eye,
+  };
 }
 
-// ── particle burst ─────────────────────────────────────────────────────────
-export function burstParticles(particles: Particle[], x: number, y: number, color: string, count = 8) {
-  for (let i = 0; i < count; i++) {
-    const a = (Math.PI * 2 * i) / count + randBetween(-0.3, 0.3);
-    const speed = randBetween(40, 130);
-    particles.push({
-      x, y,
-      vx: Math.cos(a) * speed,
-      vy: Math.sin(a) * speed,
-      r: randBetween(2, 5),
-      alpha: 1,
-      color,
-    });
-  }
+// ── bird factory ───────────────────────────────────────────────────────────
+export function makeBird(W: number, _H: number): Bird {
+  const fromLeft = Math.random() < 0.5;
+  return {
+    x: fromLeft ? -60 : W + 60,
+    y: randBetween(40, 120),
+    vx: fromLeft ? randBetween(90, 140) : randBetween(-140, -90),
+    vy: 0,
+    phase: "soaring",
+    targetX: 0, targetY: 0,
+    wingT: 0,
+    diveT: 0,
+    strikeX: 0, strikeY: 0,
+  };
 }
 
-// ── arc height at t (0→1) ──────────────────────────────────────────────────
-export function arcY(fromY: number, toY: number, d: number, t: number): number {
-  const base = fromY + (toY - fromY) * t;
-  const peak = Math.min(d * GRAVITY_PEAK, 160);
-  return base - peak * Math.sin(Math.PI * t);
+// ── fish factory ───────────────────────────────────────────────────────────
+export function makeFish(x: number, y: number): Fish {
+  return {
+    x, y: y + 80,
+    phase: "hidden",
+    t: 0,
+    targetX: x, targetY: y,
+    mouthOpen: 0,
+  };
 }

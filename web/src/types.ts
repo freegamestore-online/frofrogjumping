@@ -1,32 +1,58 @@
-export type GamePhase = "idle" | "aiming" | "jumping" | "landing" | "dead" | "win";
+export type GamePhase = "idle" | "jumping" | "dead" | "won";
+export type DeathCause = "bird" | "fish" | "water" | null;
 
 export interface Island {
   x: number;
   y: number;
-  r: number;          // radius
-  wobble: number;     // current wobble offset
-  wobbleDir: number;  // +1 / -1
+  r: number;
+  wobble: number;
+  wobbleDir: number;
   sinking: boolean;
-  sinkT: number;      // 0→1 sinking progress
+  sinkT: number;
   type: "lily" | "log" | "rock";
 }
 
 export interface Frog {
   x: number;
   y: number;
-  vx: number;
-  vy: number;
-  angle: number;      // body rotation
-  squishX: number;    // scale x (squash & stretch)
-  squishY: number;    // scale y
-  jumpT: number;      // 0→1 jump arc progress
   fromX: number;
   fromY: number;
   toX: number;
   toY: number;
+  jumpT: number;
   jumpDuration: number;
-  tongueOut: boolean;
-  tongueT: number;
+  angle: number;
+  squishX: number;
+  squishY: number;
+  islandIdx: number;   // which island it's on (-1 = in air / water)
+  alive: boolean;
+  isPlayer: boolean;
+  color: string;
+  eyeColor: string;
+}
+
+export interface Bird {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  phase: "soaring" | "diving" | "rising" | "leaving";
+  targetX: number;
+  targetY: number;
+  wingT: number;
+  diveT: number;
+  strikeX: number;
+  strikeY: number;
+}
+
+export interface Fish {
+  x: number;
+  y: number;
+  phase: "hidden" | "rising" | "snapping" | "sinking";
+  t: number;
+  targetX: number;
+  targetY: number;
+  mouthOpen: number;
 }
 
 export interface Ripple {
@@ -36,13 +62,6 @@ export interface Ripple {
   alpha: number;
 }
 
-export interface Fly {
-  x: number;
-  y: number;
-  islandIdx: number;
-  wingT: number;
-}
-
 export interface Particle {
   x: number;
   y: number;
@@ -50,5 +69,14 @@ export interface Particle {
   vy: number;
   r: number;
   alpha: number;
+  color: string;
+}
+
+export interface FloatText {
+  x: number;
+  y: number;
+  vy: number;
+  alpha: number;
+  text: string;
   color: string;
 }

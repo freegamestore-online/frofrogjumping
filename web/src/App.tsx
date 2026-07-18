@@ -1,14 +1,13 @@
 import React, { useRef, useState, useCallback } from "react";
 import { GameShell, GameTopbar } from "@freegamestore/games";
-import useControls from "./hooks/useControls";
-import useGameLoop from "./hooks/useGameLoop";
-import useHighScore from "./hooks/useHighScore";
+import { useControls } from "./hooks/useControls";
+import { useGameLoop } from "./hooks/useGameLoop";
+import { useHighScore } from "./hooks/useHighScore";
 import { drawGlow, drawText, lerp, clamp, dist, hexToRgba, randomInRange } from "./lib/canvas";
 
 const GAME_TITLE = "Frog jumping on islands in the marsh";
 const HIGH_SCORE_KEY = "frofrogjumping_highscore";
 
-// Level definitions
 const LEVELS = [
   { islands: 5, minDist: 100, maxDist: 160 },
   { islands: 7, minDist: 110, maxDist: 180 },
@@ -36,7 +35,6 @@ function randomIsland(cx: number, cy: number, minDist: number, maxDist: number, 
   let distVal = randomInRange(minDist, maxDist);
   let x = cx + Math.cos(angle) * distVal;
   let y = cy + Math.sin(angle) * distVal;
-  // Prevent overlap
   for (let tries = 0; tries < 10; tries++) {
     if (
       prevIslands.every(
@@ -60,7 +58,6 @@ function randomIsland(cx: number, cy: number, minDist: number, maxDist: number, 
 function makeLevel(levelIdx: number, width: number, height: number): Island[] {
   const lvl = LEVELS[levelIdx] ?? LEVELS[LEVELS.length - 1];
   const islands: Island[] = [];
-  // Start in center
   islands.push({ x: width / 2, y: height / 2, radius: 44 });
   let last = islands[0];
   for (let i = 1; i < lvl.islands; i++) {
@@ -83,11 +80,9 @@ function App() {
   const [frog, setFrog] = useState<Frog | null>(null);
   const controls = useControls();
 
-  // Canvas sizing
   const width = 420;
   const height = 700;
 
-  // Start/reset game
   const startGame = useCallback(() => {
     setScore(0);
     setLevel(0);
@@ -97,7 +92,6 @@ function App() {
     setFrog({ x: lvlIslands[0].x, y: lvlIslands[0].y, radius: 24, jumping: false, jumpProgress: 0 });
   }, []);
 
-  // Advance to next level (no dialog)
   const nextLevel = useCallback(() => {
     const nextIdx = level + 1;
     setLevel(nextIdx);
@@ -106,15 +100,12 @@ function App() {
     setFrog({ x: lvlIslands[0].x, y: lvlIslands[0].y, radius: 24, jumping: false, jumpProgress: 0 });
   }, [level]);
 
-  // Game loop
   useGameLoop((dt) => {
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx || !frog || islands.length === 0) return;
     ctx.clearRect(0, 0, width, height);
-    // Draw marsh background
     ctx.fillStyle = "#d1f2e5";
     ctx.fillRect(0, 0, width, height);
-    // Draw islands
     islands.forEach((isl, idx) => {
       ctx.save();
       ctx.beginPath();
@@ -125,7 +116,6 @@ function App() {
       ctx.fill();
       ctx.restore();
     });
-    // Draw frog
     ctx.save();
     let frogColor = FROG_COLORS[level % FROG_COLORS.length];
     ctx.beginPath();
@@ -135,7 +125,6 @@ function App() {
     ctx.shadowBlur = 6;
     ctx.fill();
     ctx.restore();
-    // Draw score
     drawText(ctx, `Score: ${score}`, width / 2, 36, {
       font: "24px Fraunces",
       color: "#277a39",
@@ -143,12 +132,9 @@ function App() {
       glow: true,
       glowColor: "#fff",
     });
-    // Jump input
     if (!frog.jumping && !gameOver) {
       let targetIdx = -1;
-      // Touch or click: jump to nearest island ahead
       if (controls.mouse.down || controls.touch.active) {
-        // Find nearest island not the current
         let minD = 9999;
         for (let i = 0; i < islands.length; i++) {
           const isl = islands[i];
@@ -159,86 +145,37 @@ function App() {
           }
         }
       }
-      // Keyboard: Space or Up Arrow jumps to next island
-      if (controls.keys[" "] || controls.keys["ArrowUp"]) {
-        targetIdx = islands.findIndex(
-          (isl) => dist(frog.x, frog.y, isl.x, isl.y) > 20
-        );
+      if (controls.keys.has(" ") || controls.keys.has("ArrowUp")) {
+        const curIdx = islands.findIndex((isl) => dist(frog.x, frog.y, isl.x, isl.y) < 2);
+        if (curIdx !== -1 && curIdx < islands.length - 1) {
+          targetIdx = curIdx + 1;
+        }
       }
-      if (targetIdx > -1) {
-        const isl = islands[targetIdx];
-        setFrog({ ...frog, jumping: true, target: { x: isl.x, y: isl.y }, jumpProgress: 0 });
+      if (targetIdx > 0) {
+        const target = islands[targetIdx];
+        setFrog({ ...frog, jumping: true, target: { x: target.x, y: target.y }, jumpProgress: 0 });
       }
     }
-    // Handle jump animation
     if (frog.jumping && frog.target) {
-      const jumpSpeed = 1.3;
-      let prog = frog.jumpProgress + dt * jumpSpeed;
-      prog = clamp(prog, 0, 1);
-      const nx = lerp(frog.x, frog.target.x, prog);
-      const ny = lerp(frog.y, frog.target.y, prog);
-      // Frog arc up
-      const arcY = Math.sin(prog * Math.PI) * 38;
-      const drawY = ny - arcY;
-      // Draw frog moving
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(nx, drawY, frog.radius, 0, Math.PI * 2);
-      ctx.fillStyle = frogColor;
-      ctx.shadowColor = "#3b7b47";
-      ctx.shadowBlur = 6;
-      ctx.fill();
-      ctx.restore();
+      let prog = clamp(frog.jumpProgress + dt * 2.2, 0, 1);
+      let nx = lerp(frog.x, frog.target.x, prog);
+      let ny = lerp(frog.y, frog.target.y, prog);
+      setFrog({ ...frog, x: nx, y: ny, jumpProgress: prog });
       if (prog >= 1) {
-        // Land on island
-        const idx = islands.findIndex(
-          (isl) => dist(isl.x, isl.y, frog.target!.x, frog.target!.y) < 2
-        );
-        if (idx === islands.length - 1) {
-          // Finished level
-          setScore((s) => {
-            const ns = s + 100;
-            updateHighScore(ns);
-            return ns;
-          });
-          nextLevel(); // Move to next level immediately
+        const targetIdx = islands.findIndex((isl) => dist(nx, ny, isl.x, isl.y) < 2);
+        if (targetIdx === islands.length - 1) {
+          setScore((s) => s + 100);
+          updateHighScore(score + 100);
+          nextLevel();
         } else {
           setScore((s) => s + 10);
-          setFrog({ x: frog.target.x, y: frog.target.y, radius: 24, jumping: false, jumpProgress: 0 });
+          updateHighScore(score + 10);
+          setFrog({ ...frog, x: nx, y: ny, jumping: false, jumpProgress: 0 });
         }
-      } else {
-        setFrog({ ...frog, x: nx, y: ny, jumping: true, jumpProgress: prog });
       }
     }
-    // Game over when all levels beaten
-    if (level >= LEVELS.length && !gameOver) {
-      setGameOver(true);
-      updateHighScore(score);
-    }
-    // Draw game over
-    if (gameOver) {
-      drawGlow(ctx, width / 2, height / 2 - 60, 170, "#fff7", 18);
-      drawText(ctx, "Game Over!", width / 2, height / 2 - 60, {
-        font: "34px Fraunces",
-        color: "#277a39",
-        align: "center",
-        glow: true,
-        glowColor: "#fff",
-      });
-      drawText(ctx, `Score: ${score}`, width / 2, height / 2, {
-        font: "26px Manrope",
-        color: "#277a39",
-        align: "center",
-      });
-      drawText(ctx, `High Score: ${highScore}`, width / 2, height / 2 + 38, {
-        font: "20px Manrope",
-        color: "#1e5c2a",
-        align: "center",
-      });
-    }
-  }, false);
+  });
 
-  // Start game on load
   React.useEffect(() => {
     startGame();
   }, []);
@@ -250,15 +187,13 @@ function App() {
           ref={canvasRef}
           width={width}
           height={height}
-          className="rounded-2xl bg-[#d1f2e5] shadow-xl mt-2"
-          style={{ maxWidth: "98vw", maxHeight: "78vh" }}
+          className="rounded-xl shadow-lg bg-[#d1f2e5]"
+          style={{ touchAction: "none", maxWidth: "100vw", maxHeight: "calc(100vh - 64px)" }}
         />
-        {/* Restart button only on game over */}
         {gameOver && (
           <button
-            className="mt-6 px-7 py-3 rounded-lg bg-[#277a39] text-white font-manrope text-lg shadow-md"
+            className="mt-6 px-4 py-2 rounded bg-green-500 text-white text-lg font-fraunces"
             onClick={startGame}
-            style={{ minWidth: 120 }}
           >
             Restart
           </button>

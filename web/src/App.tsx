@@ -339,7 +339,7 @@ export default function App() {
   });
 
   return (
-    <GameShell topbar={<GameTopbar title={GAME_TITLE} score={scoreDsp} highScore={highScore} />}>
+    <GameShell topbar={<GameTopbar title={GAME_TITLE} score={scoreDsp} stats={[{ label: "Best", value: highScore }]} />}>
       <div className="w-full h-full relative overflow-hidden">
         <canvas ref={canvasRef} className="block" style={{ touchAction: "none" }} />
       </div>
